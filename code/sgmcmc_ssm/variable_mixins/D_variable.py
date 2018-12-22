@@ -143,7 +143,7 @@ class DPrior(object):
             logprior += matrix_normal_logpdf(D_k,
                     mean=mean_D_k,
                     Lrowprec=LRinv_k,
-                    Lcolprec=np.diag(var_col_D_k**0.5),
+                    Lcolprec=np.diag(var_col_D_k**-0.5),
                     )
 
         logprior = super()._logprior(logprior, parameters, **kwargs)

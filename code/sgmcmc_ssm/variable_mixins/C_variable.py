@@ -143,7 +143,7 @@ class CPrior(object):
             logprior += matrix_normal_logpdf(C_k,
                     mean=mean_C_k,
                     Lrowprec=LRinv_k,
-                    Lcolprec=np.diag(var_col_C_k**0.5),
+                    Lcolprec=np.diag(var_col_C_k**-0.5),
                     )
 
         logprior = super()._logprior(logprior, parameters, **kwargs)
@@ -347,7 +347,7 @@ class CSinglePrior(object):
         logprior += matrix_normal_logpdf(parameters.C,
                 mean=mean_C,
                 Lrowprec=parameters.LRinv,
-                Lcolprec=np.diag(var_col_C**0.5),
+                Lcolprec=np.diag(var_col_C**-0.5),
                 )
 
         logprior = super()._logprior(logprior, parameters, **kwargs)

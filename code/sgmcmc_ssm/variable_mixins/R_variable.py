@@ -79,7 +79,7 @@ class RSingleMixin(object):
     @property
     def R(self):
         if self.m == 1:
-            R = self.Rinv_k**-1
+            R = self.Rinv**-1
         else:
             R = pos_def_mat_inv(self.Rinv)
         return R

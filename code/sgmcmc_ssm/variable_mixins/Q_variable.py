@@ -79,7 +79,7 @@ class QSingleMixin(object):
     @property
     def Q(self):
         if self.n == 1:
-            Q = self.Qinv_k**-1
+            Q = self.Qinv**-1
         else:
             Q = pos_def_mat_inv(self.Qinv)
         return Q

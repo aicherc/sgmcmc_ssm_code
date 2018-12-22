@@ -177,7 +177,7 @@ class LGSSMHelper(SGMCMCHelper):
         pbar = range(num_obs)
         if tqdm is not None:
             pbar = tqdm(pbar)
-            pbar.set_description("backward messages")
+            pbar.set_description("forward messages")
         for t in pbar:
             y_cur = observations[t]
 
@@ -236,7 +236,7 @@ class LGSSMHelper(SGMCMCHelper):
 
         pbar = reversed(range(num_obs))
         if tqdm is not None:
-            pbar = tqdm(pbar)
+            pbar = tqdm(pbar, total=num_obs)
             pbar.set_description("backward messages")
         for t in pbar:
             y_cur = observations[t]

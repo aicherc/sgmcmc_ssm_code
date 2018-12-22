@@ -463,8 +463,8 @@ class SGMCMCHelper(object):
         Args:
             observations (ndarray): observations
             parameters (parameters): parameters
-            backward_message (dict): backward message Pr(y_{>T} | u_{T})
-            include_init_message (boolean) whether to include t = T
+            backward_message (dict): backward message Pr(y_{>T-1} | u_{T-1})
+            include_init_message (boolean) whether to include t = -1
 
         Returns:
             backward_messages (list of dict): same format as backward_message

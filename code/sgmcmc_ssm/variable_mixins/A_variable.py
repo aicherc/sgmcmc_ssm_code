@@ -51,8 +51,8 @@ class AMixin(object):
 
     @classmethod
     def _from_vector_to_dict(cls, var_dict, vector, **kwargs):
-        num_states, m, n = kwargs['num_states'], kwargs['m'], kwargs['n']
-        A = np.reshape(vector[0:num_states*m*n], (num_states, m, n))
+        num_states, n = kwargs['num_states'], kwargs['n']
+        A = np.reshape(vector[0:num_states*n*n], (num_states, n, n))
         var_dict['A'] = A
         var_dict = super()._from_vector_to_dict(
                 var_dict, vector[num_states*m*n:], **kwargs)
@@ -158,7 +158,7 @@ class APrior(object):
             logprior += matrix_normal_logpdf(A_k,
                     mean=mean_A_k,
                     Lrowprec=LQinv_k,
-                    Lcolprec=np.diag(var_col_A_k**0.5),
+                    Lcolprec=np.diag(var_col_A_k**-0.5),
                     )
 
         logprior = super()._logprior(logprior, parameters, **kwargs)
@@ -284,10 +284,10 @@ class ASingleMixin(object):
     @classmethod
     def _from_vector_to_dict(cls, var_dict, vector, **kwargs):
         m, n = kwargs['m'], kwargs['n']
-        A = np.reshape(vector[0:m*n], (m, n))
+        A = np.reshape(vector[0:n*n], (n, n))
         var_dict['A'] = A
         var_dict = super()._from_vector_to_dict(
-                var_dict, vector[m*n:], **kwargs)
+                var_dict, vector[n*n:], **kwargs)
         return var_dict
 
     @property
@@ -374,7 +374,7 @@ class ASinglePrior(object):
         logprior += matrix_normal_logpdf(parameters.A,
                 mean=mean_A,
                 Lrowprec=parameters.LQinv,
-                Lcolprec=np.diag(var_col_A**0.5),
+                Lcolprec=np.diag(var_col_A**-0.5),
                 )
 
         logprior = super()._logprior(logprior, parameters, **kwargs)
