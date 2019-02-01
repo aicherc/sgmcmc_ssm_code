@@ -10,6 +10,7 @@ class SGMCMCSampler(object):
         raise NotImplementedError()
 
     def setup(self, **kwargs):
+        # Defines observations, prior, parameters, forward_message, backward_message
         raise NotImplementedError()
 
     def exact_loglikelihood(self):
@@ -34,56 +35,201 @@ class SGMCMCSampler(object):
         else:
             return loglikelihood + logprior
 
-    def predictive_loglikelihood(self, lag=10,
-            parameters=None, observations=None):
+    def predictive_loglikelihood(self, kind='marginal', lag=10,
+            subsequence_length=-1, minibatch_size=1, buffer_length=10,
+            num_samples=1000, parameters=None, observations=None,
+            **kwargs):
         """ Return the predictive loglikelihood given the parameters """
         if parameters is None:
             parameters = self.parameters
         if observations is None:
             observations = self.observations
 
-        pred_loglikelihood = self.message_helper.predictive_loglikelihood(
-                observations=observations,
-                parameters=parameters,
-                forward_message=self.forward_message,
-                backward_message=self.backward_message,
-                lag=lag
-                )
-        return pred_loglikelihood
+        T = observations.shape[0]
+        if kind == 'marginal':
+            pred_loglikelihood = 0.0
+            for s in range(0, minibatch_size):
+                out = self._random_subsequence_and_buffers(buffer_length,
+                        subsequence_length=subsequence_length,
+                        T=T)
+                forward_message = self.message_helper.forward_message(
+                        observations[
+                            out['left_buffer_start']:out['subsequence_start']
+                            ],
+                        self.parameters,
+                        forward_message=self.forward_message)
+                # Noisy Loglikelihood should use only forward pass
+                # E.g. log Pr(y) \approx \sum_s log Pr(y_s | y<min(s))
 
-    def noisy_loglikelihood(self,
-           subsequence_length=-1,
-            minibatch_size=1, buffer_length=10,
+                pred_loglikelihood_S = (
+                        self.message_helper.predictive_loglikelihood(
+                        observations=observations,
+                        parameters=parameters,
+                        forward_message=forward_message,
+                        backward_message=self.backward_message,
+                        lag=lag
+                        ))
+                pred_loglikelihood += (
+                        pred_loglikelihood_S * (T-lag)/(
+                        out['subsequence_end'] - out['subsequence_start'] - lag
+                        ))
+
+            pred_loglikelihood *= 1.0/minibatch_size
+            return pred_loglikelihood
+        elif kind == 'pf':
+            if kwargs.get("N", None) is None:
+                kwargs['N'] = num_samples
+            pred_loglikelihood = np.zeros(lag+1)
+            for s in range(0, minibatch_size):
+                out = self._random_subsequence_and_buffers(
+                        buffer_length=buffer_length,
+                        subsequence_length=subsequence_length,
+                        T=T)
+                relative_start = (out['subsequence_start'] -
+                        out['left_buffer_start'])
+                relative_end = (out['subsequence_end'] -
+                        out['left_buffer_start'])
+                buffer_ = observations[
+                            out['left_buffer_start']:
+                            out['right_buffer_end']
+                            ]
+                pred_loglike_add = (
+                    self.message_helper
+                    .pf_predictive_loglikelihood_estimate(
+                        observations=buffer_,
+                        parameters=self.parameters,
+                        num_steps_ahead=lag,
+                        subsequence_start=relative_start,
+                        subsequence_end=relative_end,
+                        **kwargs)
+                    )
+                for ll in range(lag+1):
+                    pred_loglikelihood[ll] += pred_loglike_add[ll] * (T-ll)/(
+                        out['subsequence_end'] - out['subsequence_start']-ll
+                        )
+            pred_loglikelihood *= 1.0/minibatch_size
+            return pred_loglikelihood
+        else:
+            raise ValueError("Unrecognized kind = {0}".format(kind))
+
+    def noisy_loglikelihood(self, kind='marginal',
+            subsequence_length=-1, minibatch_size=1, buffer_length=10,
+            num_samples=None, observations=None,
             **kwargs):
         """ Subsequence Approximation to loglikelihood
 
         Args:
+            kind (string): how to estimate the loglikelihood
             subsequence_length (int): length of subsequence used in evaluation
             minibatch_size (int): number of subsequences
             buffer_length (int): length of each subsequence buffer
 
         """
+        if observations is None:
+            observations = self.observations
+        T = observations.shape[0]
         noisy_loglikelihood = 0.0
+        if kind == 'marginal':
+            for s in range(0, minibatch_size):
+                out = self._random_subsequence_and_buffers(buffer_length,
+                        subsequence_length=subsequence_length,
+                        T=T)
+                forward_message = self.message_helper.forward_message(
+                        observations[
+                            out['left_buffer_start']:out['subsequence_start']
+                            ],
+                        self.parameters,
+                        forward_message=self.forward_message)
+                # Noisy Loglikelihood should use only forward pass
+                # E.g. log Pr(y) \approx \sum_s log Pr(y_s | y<min(s))
+                loglikelihood_S = self.message_helper.marginal_loglikelihood(
+                    observations=observations[
+                            out['subsequence_start']:out['subsequence_end']
+                            ],
+                    parameters=self.parameters,
+                    forward_message=forward_message,
+                    backward_message=self.backward_message,
+                    ) - forward_message['log_constant']
+                noisy_loglikelihood += (
+                        loglikelihood_S * T/(
+                            out['subsequence_end'] - out['subsequence_start']
+                        ))
+            noisy_loglikelihood *= 1.0/minibatch_size
+            return noisy_loglikelihood
 
-        for s in range(0, minibatch_size):
-            subsequence = self._random_subsequence_and_buffers(buffer_length,
-                    subsequence_length=subsequence_length)
-            normalization_factor = (subsequence['subsequence_end'] - \
-                    subsequence['subsequence_start']
+        elif kind == 'complete':
+            for s in range(0, minibatch_size):
+                out = self._random_subsequence_and_buffers(
+                        buffer_length=buffer_length,
+                        subsequence_length=subsequence_length,
+                        T=T)
+
+
+                buffer_ = observations[
+                        out['left_buffer_start']:out['right_buffer_end']
+                        ]
+
+                # Draw Samples:
+                latent_buffer = self.sample_x(
+                        parameters=self.parameters,
+                        observations=buffer_,
+                        num_samples=num_samples,
+                        )
+                relative_start = out['subsequence_start']-out['left_buffer_start']
+                relative_end = out['subsequence_end']-out['left_buffer_start']
+                forward_message = {}
+                if relative_start > 0:
+                    forward_message = dict(
+                            x_prev = latent_buffer[relative_start-1]
+                            )
+                loglikelihood_S = \
+                    self.message_helper.complete_data_loglikelihood(
+                        observations=observations[
+                                out['subsequence_start']:out['subsequence_end']
+                                ],
+                        latent_vars=latent_buffer[relative_start:relative_end],
+                        parameters=self.parameters,
+                        forward_message=forward_message,
+                        )
+
+
+        elif kind == 'pf':
+            if kwargs.get("N", None) is None:
+                kwargs['N'] = num_samples
+
+            noisy_loglikelihood = 0.0
+            for s in range(0, minibatch_size):
+                out = self._random_subsequence_and_buffers(
+                        buffer_length=buffer_length,
+                        subsequence_length=subsequence_length,
+                        T=T)
+                relative_start = (out['subsequence_start'] -
+                        out['left_buffer_start'])
+                relative_end = (out['subsequence_end'] -
+                        out['left_buffer_start'])
+                buffer_ = observations[
+                            out['left_buffer_start']:
+                            out['right_buffer_end']
+                            ]
+                noisy_loglike_add = (
+                    self.message_helper
+                    .pf_loglikelihood_estimate(
+                        observations=buffer_,
+                        parameters=self.parameters,
+                        subsequence_start=relative_start,
+                        subsequence_end=relative_end,
+                        **kwargs)
                     )
-            # Noisy Loglikelihood should use only forward pass
-            # E.g. log Pr(y) \approx \sum_s log Pr(y_s | y<min(s))
-            loglikelihood_S = self.message_helper.marginal_loglikelihood(
-                observations=subsequence['subsequence'],
-                parameters=self.parameters,
-                forward_message=subsequence['forward_message'],
-                backward_message=self.backward_message,
-                ) - subsequence['forward_message']['log_constant']
-            noisy_loglikelihood += (
-                    loglikelihood_S * self.T/(1.0*normalization_factor)
-                    )
-        noisy_loglikelihood *= 1.0/minibatch_size
-        return noisy_loglikelihood
+                noisy_loglikelihood += noisy_loglike_add * 1.0*T/(
+                        out['subsequence_end'] - out['subsequence_start']
+                        )
+
+            noisy_loglikelihood *= 1.0/minibatch_size
+            if np.isnan(noisy_loglikelihood):
+                raise ValueError("NaNs in loglikelihood")
+            return noisy_loglikelihood
+        else:
+            raise ValueError("Unrecognized kind = {0}".format(kind))
 
     def noisy_logjoint(self, return_loglike=False, **kwargs):
         """ Return the loglikelihood + logprior given the current parameters """
@@ -97,94 +243,205 @@ class SGMCMCSampler(object):
         else:
             return loglikelihood + logprior
 
-    def project_parameters(self):
+    def project_parameters(self, **kwargs):
         """ Project parameters to valid values + fix constants
 
         See **kwargs in __init__ for more details
         """
-        self.parameters.project_parameters(**self.options)
+        self.parameters.project_parameters(**self.options, **kwargs)
         return self.parameters
 
     def _random_subsequence_and_buffers(self, buffer_length,
-            subsequence_length):
+            subsequence_length, T=None):
         """ Get a subsequence and the forward and backward message approx"""
+        if T is None:
+            T = self.T
         if buffer_length == -1:
-            buffer_length = self.T
+            buffer_length = T
         if subsequence_length == -1:
             subsequence_start = 0
-            subsequence_end = self.T
-        elif self.T - subsequence_length <= 0:
+            subsequence_end = T
+        elif T - subsequence_length <= 0:
             subsequence_start = 0
-            subsequence_end = self.T
+            subsequence_end = T
         else:
             subsequence_start, subsequence_end = \
                     random_subsequence_and_buffers_helper(
                             subsequence_length=subsequence_length,
-                            T=self.T,
+                            T=T,
                             options=self.options,
                             )
 
         left_buffer_start = max(0, subsequence_start - buffer_length)
-        right_buffer_end = min(self.T, subsequence_end + buffer_length)
+        right_buffer_end = min(T, subsequence_end + buffer_length)
 
-        forward_message = self.message_helper.forward_message(
-                self.observations[left_buffer_start:subsequence_start],
-                self.parameters,
-                forward_message=self.forward_message)
-
-        backward_message = self.message_helper.backward_message(
-                self.observations[subsequence_end:right_buffer_end],
-                self.parameters,
-                backward_message=self.backward_message,
-                )
 
         out = dict(
             subsequence_start = subsequence_start,
             subsequence_end = subsequence_end,
             left_buffer_start = left_buffer_start,
             right_buffer_end = right_buffer_end,
-            subsequence = self.observations[subsequence_start:subsequence_end],
-            forward_message = forward_message,
-            backward_message = backward_message,
             )
         return out
 
-    def _noisy_grad_loglikelihood(self, subsequence_length=-1,
-            minibatch_size=1, buffer_length=0):
-        noisy_grad = {var: np.zeros_like(value)
+    def _noisy_grad_loglikelihood(self, kind='marginal',
+            subsequence_length=-1, minibatch_size=1, buffer_length=0,
+            num_samples=None, observations=None, **kwargs):
+        if observations is None:
+            observations = self.observations
+        T = observations.shape[0]
+        if kind == 'marginal':
+            noisy_grad = {var: np.zeros_like(value)
+                    for var, value in self.parameters.as_dict().items()}
+
+            for s in range(0, minibatch_size):
+                out = self._random_subsequence_and_buffers(buffer_length,
+                        subsequence_length=subsequence_length,
+                        T=T)
+                forward_message = self.message_helper.forward_message(
+                        observations[
+                            out['left_buffer_start']:out['subsequence_start']
+                            ],
+                        self.parameters,
+                        forward_message=self.forward_message)
+
+                backward_message = self.message_helper.backward_message(
+                        observations[
+                            out['subsequence_end']:out['right_buffer_end']
+                            ],
+                        self.parameters,
+                        backward_message=self.backward_message,
+                        )
+
+                gradient_kwargs = dict(
+                    observations=observations[
+                        out['subsequence_start']:out['subsequence_end']
+                        ],
+                    parameters=self.parameters,
+                    forward_message=forward_message,
+                    backward_message=backward_message,
+                    )
+                gradient_kwargs.update(**kwargs)
+                noisy_grad_add = (
+                    self.message_helper
+                    .gradient_marginal_loglikelihood(
+                        **gradient_kwargs
+                        )
+                    )
+                for var in noisy_grad:
+                    noisy_grad[var] += noisy_grad_add[var] * 1.0*T/(
+                        out['subsequence_end'] -
+                        out['subsequence_start']
+                        )
+
+            for var in noisy_grad:
+                noisy_grad[var] *= 1.0/minibatch_size
+
+                if np.any(np.isnan(noisy_grad[var])):
+                    raise ValueError("NaNs in gradient of {0}".format(var))
+                if np.linalg.norm(noisy_grad[var]) > 1e16:
+                    logger.warning("Norm of noisy_grad_loglike[{1} > 1e16: {0}".format(
+                        noisy_grad_loglike, var))
+            return noisy_grad
+
+        elif kind == 'complete':
+            noisy_grad = {var: np.zeros_like(value)
                 for var, value in self.parameters.as_dict().items()}
 
-        for s in range(0, minibatch_size):
-            subsequence = self._random_subsequence_and_buffers(buffer_length,
-                    subsequence_length=subsequence_length)
+            for s in range(0, minibatch_size):
+                out = self._random_subsequence_and_buffers(
+                        buffer_length=buffer_length,
+                        subsequence_length=subsequence_length,
+                        T=T)
 
-            gradient_kwargs = dict(
-                observations=subsequence['subsequence'],
-                parameters=self.parameters,
-                forward_message=subsequence['forward_message'],
-                backward_message=subsequence['backward_message'],
-                )
-            noisy_grad_add = (
-                self.message_helper
-                .gradient_marginal_loglikelihood(
-                    **gradient_kwargs
+
+                buffer_ = observations[
+                        out['left_buffer_start']:out['right_buffer_end']
+                        ]
+                # Draw Samples:
+                latent_buffer = self.sample_x(
+                        parameters=self.parameters,
+                        observations=buffer_,
+                        num_samples=num_samples,
+                        )
+                relative_start = out['subsequence_start']-out['left_buffer_start']
+                relative_end = out['subsequence_end']-out['left_buffer_start']
+                forward_message = {}
+                if relative_start > 0:
+                    forward_message = dict(
+                            x_prev = latent_buffer[relative_start-1]
+                            )
+                noisy_grad_add = (
+                    self.message_helper
+                    .gradient_complete_data_loglikelihood(
+                        observations=observations[
+                            out['subsequence_start']:out['subsequence_end']
+                            ],
+                        latent_vars=latent_buffer[relative_start:relative_end],
+                        parameters=self.parameters,
+                        forward_message=forward_message,
+                        **kwargs)
                     )
-                )
+                for var in noisy_grad:
+                    noisy_grad[var] += noisy_grad_add[var] * 1.0*T/(
+                        out['subsequence_end'] -
+                        out['subsequence_start']
+                        )
             for var in noisy_grad:
-                noisy_grad[var] += noisy_grad_add[var] * 1.0*self.T/(
-                    subsequence['subsequence_end'] -
-                    subsequence['subsequence_start']
+                noisy_grad[var] *= 1.0/minibatch_size
+
+                if np.any(np.isnan(noisy_grad[var])):
+                    raise ValueError("NaNs in gradient of {0}".format(var))
+                if np.linalg.norm(noisy_grad[var]) > 1e16:
+                    logger.warning("Norm of noisy_grad_loglike[{1} > 1e16: {0}".format(
+                        noisy_grad_loglike, var))
+            return noisy_grad
+
+        elif kind == 'pf':
+            if kwargs.get("N", None) is None:
+                kwargs['N'] = num_samples
+
+            noisy_grad = {var: np.zeros_like(value, dtype=float)
+                for var, value in self.parameters.as_dict().items()}
+
+            for s in range(0, minibatch_size):
+                out = self._random_subsequence_and_buffers(
+                        buffer_length=buffer_length,
+                        subsequence_length=subsequence_length,
+                        T=T)
+                relative_start = (out['subsequence_start'] -
+                        out['left_buffer_start'])
+                relative_end = (out['subsequence_end'] -
+                        out['left_buffer_start'])
+                buffer_ = observations[
+                            out['left_buffer_start']:
+                            out['right_buffer_end']
+                            ]
+                noisy_grad_add = (
+                    self.message_helper
+                    .pf_score_estimate(
+                        observations=buffer_,
+                        parameters=self.parameters,
+                        subsequence_start=relative_start,
+                        subsequence_end=relative_end,
+                        **kwargs)
                     )
+                for var in noisy_grad:
+                    noisy_grad[var] += noisy_grad_add[var] * 1.0*T/(
+                        out['subsequence_end'] -
+                        out['subsequence_start']
+                        )
 
-        for var in noisy_grad:
-            noisy_grad[var] *= 1.0/minibatch_size
-
-            if np.any(np.isnan(noisy_grad[var])):
-                raise ValueError("NaNs in gradient of {0}".format(var))
-            if np.linalg.norm(noisy_grad[var]) > 1e16:
-                logger.warning("Norm of noisy_grad_loglike[{1} > 1e16: {0}".format(
-                    noisy_grad_loglike, var))
-        return noisy_grad
+            for var in noisy_grad:
+                noisy_grad[var] *= 1.0/minibatch_size
+                if np.any(np.isnan(noisy_grad[var])):
+                    raise ValueError("NaNs in gradient of {0}".format(var))
+                if np.linalg.norm(noisy_grad[var]) > 1e16:
+                    logger.warning("Norm of noisy_grad_[{1}] > 1e16: {0}".format(
+                        noisy_grad[var], var))
+            return noisy_grad
+        else:
+            raise ValueError("Unrecognized kind = {0}".format(kind))
 
     def noisy_gradient(self, preconditioner=None, is_scaled=True, **kwargs):
         """ Noisy Gradient Estimate
@@ -363,6 +620,117 @@ class SGMCMCSampler(object):
         """
         raise NotImplementedError()
 
+class SeqSGMCMCSampler(object):
+    """ Mixin for handling a list of sequences """
+    def setup(self, observations, prior, parameters=None, **kwargs):
+        """ Initialize the sampler
+
+        Args:
+            observations (list of ndarray): list of L observations ndarrays
+            prior (Prior)
+            parameters (Parameters)
+        """
+        super().setup(observations[0], prior, parameters=parameters, **kwargs)
+        self.observations = observations
+        self.T = np.sum([observation.shape[0] for observation in observations])
+        return
+
+    def exact_loglikelihood(self, observations=None):
+        """ Return exact loglikelihood over all observation sequences """
+        if observations is None:
+            observations = self.observations
+        loglikelihood = 0
+        for observation in observations:
+            loglikelihood += self.message_helper.marginal_loglikelihood(
+                    observations=observation,
+                    parameters=self.parameters,
+                    forward_message=self.forward_message,
+                    backward_message=self.backward_message,
+                    )
+        return loglikelihood
+
+    def noisy_loglikelihood(self, num_sequences=-1, observations=None,
+            **kwargs):
+        """ Subsequence Approximation to loglikelihood
+
+        Args:
+            num_sequences (int): how many observation sequences to use
+                (default = -1) is to use all observation sequences
+        """
+        if observations is None:
+            observations = self.observations
+        loglikelihood = 0
+        T = 0.0
+        sequence_indices = np.arange(len(observations))
+        if num_sequences != -1:
+            sequence_indices = np.random.choice(
+                    sequence_indices, num_sequences, replace=False,
+                    )
+        for sequence_index in sequence_indices:
+            T += observations[sequence_index].shape[0]
+            loglikelihood += super().noisy_loglikelihood(
+                    observations=observations[sequence_index],
+                    **kwargs)
+        if num_sequences != -1:
+            loglikelihood *= self.T / T
+        return loglikelihood
+
+    def predictive_loglikelihood(self, num_sequences=-1, observations=None, **kwargs):
+        """ Return the predictive loglikelihood given the parameters """
+        if observations is None:
+            observations = self.observations
+        predictive_loglikelihood = 0
+        T = 0.0
+        sequence_indices = np.arange(len(observations))
+        if num_sequences != -1:
+            sequence_indices = np.random.choice(
+                    sequence_indices, num_sequences, replace=False,
+                    )
+        for sequence_index in sequence_indices:
+            T += observations[sequence_index].shape[0]
+            predictive_loglikelihood += super().predictive_loglikelihood(
+                    observations=observations[sequence_index],
+                    **kwargs)
+        if num_sequences != -1:
+            predictive_loglikelihood *= self.T / T
+        return predictive_loglikelihood
+
+    def _noisy_grad_loglikelihood(self, num_sequences=-1, **kwargs):
+        """ Subsequence approximation to gradient of loglikelihood
+
+        Args:
+            num_sequences (int): how many observation sequences to use
+                (default = -1) is to use all observation sequences
+        """
+        noisy_grad_loglike = None
+        T = 0.0
+
+        sequence_indices = np.arange(len(self.observations))
+        if num_sequences != -1:
+            sequence_indices = np.random.choice(
+                    sequence_indices, num_sequences, replace=False,
+                    )
+        for sequence_index in sequence_indices:
+            noisy_grad_index = super()._noisy_grad_loglikelihood(
+                    observations=self.observations[sequence_index],
+                    **kwargs)
+            T += self.observations[sequence_index].shape[0]
+            if noisy_grad_loglike is None:
+                noisy_grad_loglike = {var: noisy_grad_index[var]
+                        for var in noisy_grad_index.keys()
+                        }
+            else:
+                noisy_grad_loglike = {
+                        var: noisy_grad_loglike[var] + noisy_grad_index[var]
+                        for var in noisy_grad_index.keys()
+                        }
+        if num_sequences != -1:
+            noisy_grad_loglike = {
+                    var: noisy_grad_loglike[var] * self.T / T
+                    for var in noisy_grad_index.keys()
+                    }
+        return noisy_grad_loglike
+
 class SGMCMCHelper(object):
     """ Base Class for SGMCMC Helper """
     def __init__(self, **kwargs):
@@ -503,7 +871,7 @@ class SGMCMCHelper(object):
 
         Args:
             observations (ndarray): num_obs observations
-            parameters (GAUSSHMMParameters): parameters of GAUSSHMM
+            parameters (Parameters): parameters
             forward_message (dict): Pr(u_-1, y_<0 | parameters)
             backward_message (dict): Pr(y_>T | u_T, parameters)
 
@@ -580,6 +948,98 @@ class SGMCMCHelper(object):
         # Override for memory savings
         return self._backward_messages(observations, parameters,
                 backward_message, **kwargs)[0]
+
+    def pf_score_estimate(self, observations, parameters,
+            subsequence_start=0, subsequence_end=None,
+            pf="poyiadjis_N", N=100, kernel='prior',
+            **kwargs):
+        """ Particle Filter Score Estimate
+
+        Args:
+            observations (ndarray): num_obs bufferd observations
+            parameters (Parameters): parameters
+            subsequence_start (int): relative start of subsequence
+                (0:subsequence_start are left buffer)
+            subsequence_end (int): relative end of subsequence
+                (subsequence_end: is right buffer)
+            pf (string): particle filter name
+                "nemeth" - use Nemeth et al. O(N)
+                "poyiadjis_N" - use Poyiadjis et al. O(N)
+                "poyiadjis_N2" - use Poyiadjis et al. O(N^2)
+                "paris" - use PaRIS Olsson + Westborn O(N log N)
+            N (int): number of particles used by particle filter
+            kernel (string): kernel to use
+                "prior" - bootstrap filter P(X_t | X_{t-1})
+                "optimal" - bootstrap filter P(X_t | X_{t-1}, Y_t)
+            **kwargs - additional keyword args for individual filters
+
+        Return:
+            grad (dict): grad of variables in parameters
+
+        """
+        raise NotImplementedError()
+
+    def pf_loglikelihood_estimate(self, observations, parameters,
+            subsequence_start=0, subsequence_end=None,
+            pf="poyiadjis_N", N=1000, kernel='prior',
+            **kwargs):
+        """ Particle Filter Marginal Log-Likelihood Estimate
+
+        Args:
+            observations (ndarray): num_obs bufferd observations
+            parameters (Parameters): parameters
+            subsequence_start (int): relative start of subsequence
+                (0:subsequence_start are left buffer)
+            subsequence_end (int): relative end of subsequence
+                (subsequence_end: is right buffer)
+            pf (string): particle filter name
+                "nemeth" - use Nemeth et al. O(N)
+                "poyiadjis_N" - use Poyiadjis et al. O(N)
+                "poyiadjis_N2" - use Poyiadjis et al. O(N^2)
+                "paris" - use PaRIS Olsson + Westborn O(N log N)
+            N (int): number of particles used by particle filter
+            kernel (string): kernel to use
+                "prior" - bootstrap filter P(X_t | X_{t-1})
+                "optimal" - bootstrap filter P(X_t | X_{t-1}, Y_t)
+            **kwargs - additional keyword args for individual filters
+
+        Return:
+            loglikelihood (double): marignal log likelihood estimate
+
+        """
+        raise NotImplementedError()
+
+    def pf_predictive_loglikelihood_estimate(self, observations, parameters,
+            num_steps_ahead=5, subsequence_start=0, subsequence_end=None,
+            pf="pf_filter", N=1000, kernel=None,
+            **kwargs):
+        """ Particle Filter Predictive Log-Likelihoood Estimate
+
+        Returns predictive log-likleihood for k = [0,1, ...,num_steps_ahead]
+
+        Args:
+            observations (ndarray): num_obs bufferd observations
+            parameters (Parameters): parameters
+            num_steps_ahead (int): number of steps
+            subsequence_start (int): relative start of subsequence
+                (0:subsequence_start are left buffer)
+            subsequence_end (int): relative end of subsequence
+                (subsequence_end: is right buffer)
+            N (int): number of particles used by particle filter
+            kernel (string): kernel to use
+            **kwargs - additional keyword args for individual filters
+
+        Return:
+            predictive_loglikelihood (num_steps_ahead + 1 ndarray)
+
+        """
+        raise NotImplementedError()
+
+    def pf_latent_var_marginal(self, observations, parameters,
+            subsequence_start=0, subsequence_end=None,
+            pf="poyiadjis_N", N=100, kernel='prior',
+            **kwargs):
+        raise NotImplementedError()
 
 
 def random_subsequence_and_buffers_helper(subsequence_length, T, options):

@@ -359,22 +359,64 @@ def best_double_permutation_metric_function_parameter(parameter_name,
         return metric
     return custom_metric_function
 
-def noisy_logjoint_loglike_metric(**kwargs):
+def noisy_logjoint_loglike_metric(metric_name_prefix='', **kwargs):
+    metric_names = [
+            '{0}noisy_logjoint'.format(metric_name_prefix),
+            '{0}noisy_loglikelihood'.format(metric_name_prefix),
+            ]
     def custom_metric_func(sampler):
         res = sampler.noisy_logjoint(return_loglike=True, **kwargs)
         return [
             dict(
                 variable='sampler',
-                metric='noisy_logjoint',
+                metric=metric_names[0],
                 value=res['logjoint'],
                 ),
             dict(
                 variable='sampler',
-                metric='noisy_loglikelihood',
+                metric=metric_names[1],
                 value=res['loglikelihood'],
                 ),
             ]
     return custom_metric_func
+
+def noisy_predictive_logjoint_loglike_metric(num_steps_ahead, kind='pf',
+        metric_name_prefix='', **kwargs):
+    metric_names = [
+        '{0}{1}_pred_loglikelihood'.format(metric_name_prefix, ii)
+        for ii in range(num_steps_ahead+1)
+        ]
+    if kind=='pf':
+        def custom_metric_func(sampler):
+            res = sampler.predictive_loglikelihood(
+                    lag=num_steps_ahead,
+                    kind=kind,
+                    **kwargs)
+            return [
+                dict(
+                    variable='sampler',
+                    metric=metric_names[ii],
+                    value=res[ii],
+                    )
+                for ii in range(num_steps_ahead+1)
+                ]
+    else:
+        def custom_metric_func(sampler):
+            res = sampler.predictive_loglikelihood(
+                    lag=num_steps_ahead,
+                    kind=kind
+                    **kwargs)
+            return [
+                dict(
+                    variable='sampler',
+                    metric=metric_names[-1],
+                    value=res,
+                    )
+                ]
+
+    return custom_metric_func
+
+
 
 def metric_compare_z(true_z):
     """ Return NMI, Precision, Recall between inferred and true discrete labels

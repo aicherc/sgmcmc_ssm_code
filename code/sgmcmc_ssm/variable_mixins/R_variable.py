@@ -48,7 +48,7 @@ class RSingleMixin(object):
         self.LRinv[np.triu_indices_from(self.LRinv, 1)] = 0
 
         if kwargs.get('thresh_LRinv', True):
-           # Threshold diag(LQinv) to be positive
+           # Threshold diag(LRinv) to be positive
             LRinv = self.LRinv
             if np.any(np.diag(LRinv) < 0.0):
                 logger.info(
@@ -138,7 +138,7 @@ class RMixin(object):
             LRinv_k[np.triu_indices_from(LRinv_k, 1)] = 0
 
         if kwargs.get('thresh_LRinv', True):
-           # Threshold diag(LQinv) to be positive
+           # Threshold diag(LRinv) to be positive
             LRinv = self.LRinv
             for LRinv_k in LRinv:
                 if np.any(np.diag(LRinv_k) < 0.0):
@@ -473,6 +473,7 @@ class RSinglePreconditioner(object):
 
     def _precondition(self, precond_grad, grad, parameters, **kwargs):
         Rinv = parameters.Rinv
+        grad['LRinv'][np.triu_indices_from(grad['LRinv'], 1)] = 0
         precond_grad['LRinv'] = np.dot(0.5*Rinv, grad['LRinv'])
         precond_grad = super()._precondition(precond_grad, grad,
                 parameters, **kwargs)
@@ -489,7 +490,7 @@ class RSinglePreconditioner(object):
         return noise
 
     def _correction_term(self, correction, parameters, **kwargs):
-        correction['LRinv'] = parameters.LRinv
+        correction['LRinv'] = 0.5*(parameters.m + 1) * parameters.LRinv
         super()._correction_term(correction, parameters, **kwargs)
         return correction
 
@@ -500,6 +501,8 @@ class RPreconditioner(object):
 
     def _precondition(self, precond_grad, grad, parameters, **kwargs):
         Rinv = parameters.Rinv
+        for k in range(parameters.num_states):
+            grad['LRinv'][k][np.triu_indices_from(grad['LRinv'][k], 1)] = 0
         precond_LRinv = np.array([
             np.dot(0.5*Rinv[k], grad['LRinv'][k])
             for k in range(parameters.num_states)
@@ -526,7 +529,7 @@ class RPreconditioner(object):
         return noise
 
     def _correction_term(self, correction, parameters, **kwargs):
-        correction['LRinv'] = parameters.LRinv
+        correction['LRinv'] = 0.5*(parameters.m + 1) * parameters.LRinv
         super()._correction_term(correction, parameters, **kwargs)
         return correction
 

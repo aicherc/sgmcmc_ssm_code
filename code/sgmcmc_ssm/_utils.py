@@ -141,15 +141,23 @@ def varp_stability_projection(A, eigenvalue_cutoff=0.9999, logger=logger):
     m, mp = np.shape(A)
     p = mp//m
     A_stable = A
-    F = np.concatenate([A, np.eye(N=m*(p-1), M = m*p)])
-    lambduhs = np.linalg.eig(F)[0]
-    largest_eigenvalue = np.max(np.abs(lambduhs))
-    if largest_eigenvalue > eigenvalue_cutoff:
-        logger.info("Thresholding Largest Eigenval F: {0} > {1}".format(
-            largest_eigenvalue, eigenvalue_cutoff))
-        for ii in range(p):
-            A_stable[:, m*ii:m*(ii+1)] *= \
-                    (eigenvalue_cutoff/largest_eigenvalue)**(ii+1)
+    if m > 1 or p > 1:
+        F = np.concatenate([A, np.eye(N=m*(p-1), M = m*p)])
+        lambduhs = np.linalg.eig(F)[0]
+        largest_eigenvalue = np.max(np.abs(lambduhs))
+        if largest_eigenvalue > eigenvalue_cutoff:
+            logger.info("Thresholding Largest Eigenval F: {0} > {1}".format(
+                largest_eigenvalue, eigenvalue_cutoff))
+            for ii in range(p):
+                A_stable[:, m*ii:m*(ii+1)] *= \
+                        (eigenvalue_cutoff/largest_eigenvalue)**(ii+1)
+    else:
+        largest_eigenvalue = np.abs(A[0,0])
+        if largest_eigenvalue > eigenvalue_cutoff:
+            logger.info("Thresholding |A|: {0} > {1}".format(
+                largest_eigenvalue, eigenvalue_cutoff))
+            A_stable *= (eigenvalue_cutoff/largest_eigenvalue)
+
     return A_stable
 
 # Asymptotic precision for VAR(1)

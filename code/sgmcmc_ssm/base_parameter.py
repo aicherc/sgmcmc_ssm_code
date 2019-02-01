@@ -30,9 +30,12 @@ class BaseParameters(object):
     def _set_var_dict(self, **kwargs):
         return
 
-    def as_dict(self):
+    def as_dict(self, copy=True):
         """ Return Dict """
-        return self.var_dict
+        if copy:
+            return self.var_dict.copy()
+        else:
+            return self.var_dict
 
     def as_vector(self):
         """ Return flatten vector representation """

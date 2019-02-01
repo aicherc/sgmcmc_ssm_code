@@ -473,6 +473,7 @@ class QSinglePreconditioner(object):
 
     def _precondition(self, precond_grad, grad, parameters, **kwargs):
         Qinv = parameters.Qinv
+        grad['LQinv'][np.triu_indices_from(grad['LQinv'], 1)] = 0
         precond_grad['LQinv'] = np.dot(0.5*Qinv, grad['LQinv'])
         precond_grad = super()._precondition(precond_grad, grad,
                 parameters, **kwargs)
@@ -489,7 +490,7 @@ class QSinglePreconditioner(object):
         return noise
 
     def _correction_term(self, correction, parameters, **kwargs):
-        correction['LQinv'] = parameters.LQinv
+        correction['LQinv'] = 0.5*(parameters.n + 1) * parameters.LQinv
         super()._correction_term(correction, parameters, **kwargs)
         return correction
 
@@ -500,6 +501,9 @@ class QPreconditioner(object):
 
     def _precondition(self, precond_grad, grad, parameters, **kwargs):
         Qinv = parameters.Qinv
+        for k in range(parameters.num_states):
+            grad['LQinv'][k][np.triu_indices_from(grad['LQinv'][k], 1)] = 0
+
         precond_LQinv = np.array([
             np.dot(0.5*Qinv[k], grad['LQinv'][k])
             for k in range(parameters.num_states)
@@ -526,7 +530,7 @@ class QPreconditioner(object):
         return noise
 
     def _correction_term(self, correction, parameters, **kwargs):
-        correction['LQinv'] = parameters.LQinv
+        correction['LQinv'] = 0.5*(parameters.n + 1) * parameters.LQinv
         super()._correction_term(correction, parameters, **kwargs)
         return correction
 

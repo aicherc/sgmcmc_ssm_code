@@ -283,7 +283,7 @@ class ASingleMixin(object):
 
     @classmethod
     def _from_vector_to_dict(cls, var_dict, vector, **kwargs):
-        m, n = kwargs['m'], kwargs['n']
+        n = kwargs['n']
         A = np.reshape(vector[0:n*n], (n, n))
         var_dict['A'] = A
         var_dict = super()._from_vector_to_dict(
