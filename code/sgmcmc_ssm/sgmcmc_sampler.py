@@ -608,7 +608,7 @@ class SGMCMCSampler(object):
                 self.parameters, scale=scale)
         for var in self.parameters.var_dict:
             self.parameters.var_dict[var] += \
-                epsilon * (delta[var] - correction[var]) + \
+                epsilon * (delta[var] + correction[var]) + \
                 np.sqrt(2.0*epsilon) * white_noise[var]
         return self.parameters
 
