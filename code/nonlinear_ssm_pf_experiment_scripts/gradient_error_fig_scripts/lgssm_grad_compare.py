@@ -185,7 +185,8 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
         # Checkpoint Results
         total_result_df = pd.concat(results_dfs, ignore_index=True)
         joblib.dump(total_result_df,
-                os.path.join(path_to_out, 'summary_dat_joblib.gz')) if trial % 10 == 0:
+                os.path.join(path_to_out, 'summary_dat_joblib.gz'))
+        if trial % 10 == 0:
             for variable in variables:
                 plt.close('all')
                 fig, ax = plt.subplots(1,1)
@@ -235,7 +236,7 @@ if __name__ == "__main__":
     pars = np.array((A, Q, R))
     path_to_out = os.path.join(
             "./scratch/lgssm_grad_compare/",
-            "{0}".format(tuple(pars))
+            "{0}".format(tuple(pars)))
     make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out)
 
 

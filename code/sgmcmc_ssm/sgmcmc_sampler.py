@@ -341,7 +341,7 @@ class SGMCMCSampler(object):
                     raise ValueError("NaNs in gradient of {0}".format(var))
                 if np.linalg.norm(noisy_grad[var]) > 1e16:
                     logger.warning("Norm of noisy_grad_loglike[{1} > 1e16: {0}".format(
-                        noisy_grad_loglike, var))
+                        noisy_grad[var], var))
             return noisy_grad
 
         elif kind == 'complete':
@@ -558,7 +558,7 @@ class SGMCMCSampler(object):
             white_noise = {var: np.random.normal(
                 loc=0,
                 scale=np.sqrt(scale),
-                size = value.shape
+                size=value.shape
                 ) for var, value in self.parameters.as_dict().items()}
 
         return white_noise

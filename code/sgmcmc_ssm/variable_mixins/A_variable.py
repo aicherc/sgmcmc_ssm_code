@@ -8,7 +8,7 @@ from .._utils import (
         )
 logger = logging.getLogger(name=__name__)
 
-# Transition Matrix for regression covariates (m by n) matrices
+# Transition Matrix for regression covariates (n by n) matrices
 class AMixin(object):
     # Mixin for A[0], ..., A[num_states-1] variables
     def _set_dim(self, **kwargs):
@@ -55,7 +55,7 @@ class AMixin(object):
         A = np.reshape(vector[0:num_states*n*n], (num_states, n, n))
         var_dict['A'] = A
         var_dict = super()._from_vector_to_dict(
-                var_dict, vector[num_states*m*n:], **kwargs)
+                var_dict, vector[num_states*n*n:], **kwargs)
         return var_dict
 
     @property
@@ -274,6 +274,11 @@ class ASingleMixin(object):
                     eigenvalue_cutoff=kwargs.get('A_eigenvalue_cutoff', 0.9999),
                     logger=logger)
             self.A = A
+
+        if kwargs.get('fix_A') is not None:
+            # Fix A
+            self.A = kwargs['fix_A'].copy()
+
         return super()._project_parameters(**kwargs)
 
     @classmethod
@@ -299,9 +304,6 @@ class ASingleMixin(object):
         self.var_dict['A'] = A
         return
 
-    @property
-    def m(self):
-        return self.dim['m']
     @property
     def n(self):
         return self.dim['n']

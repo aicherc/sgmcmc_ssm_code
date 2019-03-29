@@ -57,9 +57,15 @@ class RSingleMixin(object):
                 LRinv[:] = np.linalg.cholesky(
                     np.dot(LRinv, LRinv.T) + np.eye(self.m)*1e-9)
             self.LRinv = LRinv
+
         if kwargs.get('diag_R', False):
            # Threshold LRinv to be diagonal
            self.LRinv = np.diag(np.diag(self.LRinv))
+
+        if kwargs.get('fix_LRinv') is not None:
+            # Fix LRinv
+            self.LRinv = kwargs['fix_LRinv'].copy()
+
         return super()._project_parameters(**kwargs)
 
     @property

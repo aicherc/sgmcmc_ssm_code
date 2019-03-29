@@ -411,7 +411,7 @@ class ARPHMMSampler(SGMCMCSampler):
             z (ndarray): latent var assignment
 
         Return:
-            init_parameters (GAUSSHMMParameters): init_parameters
+            init_parameters (ARPHMMParameters): init_parameters
         """
         # Check z is appropriate size
         if np.shape(z)[0] != self.T:
@@ -452,7 +452,7 @@ class ARPHMMSampler(SGMCMCSampler):
 
 
         Returns:
-            init_parameters (GAUSSHMMParameters): init_parameters
+            init_parameters (ARPHMMParameters): init_parameters
         """
         from sklearn.cluster import KMeans, MiniBatchKMeans
 

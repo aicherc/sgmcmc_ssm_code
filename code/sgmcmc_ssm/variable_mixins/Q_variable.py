@@ -60,6 +60,11 @@ class QSingleMixin(object):
         if kwargs.get('diag_Q', False):
            # Threshold LQinv to be diagonal
            self.LQinv = np.diag(np.diag(self.LQinv))
+
+        if kwargs.get('fix_LQinv') is not None:
+            # Fix LQinv
+            self.LQinv = kwargs['fix_LQinv'].copy()
+
         return super()._project_parameters(**kwargs)
 
     @property

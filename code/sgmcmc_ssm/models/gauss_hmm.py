@@ -553,7 +553,6 @@ class GaussHMMHelper(HMMHelper):
                 grad['LRinv'][k] += (
                         (R_k - np.outer(diff_k, diff_k)).dot(LRinv_k)
                         ) * marg_post[k]
-
         return grad
 
 class GaussHMMSampler(SGMCMCSampler):

@@ -105,3 +105,72 @@ def plot_trace_plot(evaluator, full_trace=True, query_string=None,
 
     return fig, axes
 
+
+def plot_svm_data_fit(observations, true_latent_vars=None,
+        sampler=None, tqdm=None, N=10000,
+        ignore_warning=False):
+    """ Plot fit of SVM to the Data """
+    if observations.shape[0] > 1000 and not ignore_warning:
+        raise ValueError("PF inference for observations > 1000 is slow")
+    fig, axes = plt.subplots(2, 1, sharex=True)
+    axes[0].plot(observations, 'oC0', label='data')
+    axes[0].set_ylabel('raw observations')
+    axes[1].plot(np.log(observations**2)-np.mean(np.log(observations**2)), 'oC0',
+            label='log(data^2) - mean(log(data^2))')
+    axes[1].set_ylabel('log(observations^2)')
+
+    if true_latent_vars is not None:
+        axes[1].plot(true_latent_vars, '-C1', label='latent_var')
+
+    if sampler is not None:
+        from sgmcmc_ssm.models.svm import SVMSampler
+        if not isinstance(sampler, SVMSampler):
+            raise ValueError("sampler must be an SVMSampler")
+        smoothed_mean, smoothed_var = sampler.message_helper.pf_latent_var_marginal(
+                observations, sampler.parameters, N=N, tqdm=tqdm)
+        axes[1].plot(smoothed_mean[:,0], '-C2', label='PF E[X|Y] +/- SD(X|Y)')
+        axes[1].plot(smoothed_mean[:,0]+np.sqrt(smoothed_var[:,0,0]),'--C2')
+        axes[1].plot(smoothed_mean[:,0]-np.sqrt(smoothed_var[:,0,0]),'--C2')
+
+    axes[0].legend()
+    axes[1].legend()
+    return fig, axes
+
+def plot_garch_data_fit(observations, true_latent_vars=None,
+        sampler=None, tqdm=None, N=10000,
+        ignore_warning=False):
+    """ Plot fit of GARCH to the Data """
+    if observations.shape[0] > 1000 and not ignore_warning:
+        raise ValueError("PF inference for observations > 1000 is slow")
+    fig, axes = plt.subplots(2, 1, sharex=True)
+    axes[0].plot(observations, 'oC0', label='y_t')
+    axes[0].set_ylabel('observations')
+    axes[1].plot(observations**2, 'oC0',
+            label='y_t^2')
+    axes[1].set_ylabel('observations^2')
+
+    if true_latent_vars is not None:
+        axes[0].plot(true_latent_vars, '-C1', label='x_t')
+        axes[1].plot(true_latent_vars**2, '-C1', label='x_t^2')
+
+    if sampler is not None:
+        from sgmcmc_ssm.models.garch import GARCHSampler
+        if not isinstance(sampler, GARCHSampler):
+            raise ValueError("sampler must be an GARCHSampler")
+        smoothed_mean, smoothed_var = sampler.message_helper.pf_latent_var_marginal(
+                observations, sampler.parameters, N=N, tqdm=tqdm)
+        axes[0].plot(smoothed_mean[:,0], '-C2', label='PF E[X|Y] +/- SD(X|Y)')
+        axes[0].plot(smoothed_mean[:,0]+np.sqrt(smoothed_var[:,0,0]),'--C2')
+        axes[0].plot(smoothed_mean[:,0]-np.sqrt(smoothed_var[:,0,0]),'--C2')
+        axes[1].plot(smoothed_mean[:,0]**2, '-C2', label='PF E[X|Y]**2')
+
+    axes[0].legend()
+    axes[1].legend()
+    return fig, axes
+
+
+
+
+
+
+

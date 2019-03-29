@@ -404,7 +404,7 @@ def noisy_predictive_logjoint_loglike_metric(num_steps_ahead, kind='pf',
         def custom_metric_func(sampler):
             res = sampler.predictive_loglikelihood(
                     lag=num_steps_ahead,
-                    kind=kind
+                    kind=kind,
                     **kwargs)
             return [
                 dict(

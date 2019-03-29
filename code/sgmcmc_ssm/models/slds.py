@@ -1436,6 +1436,89 @@ class SLDSSampler(SGMCMCSampler):
 
         return
 
+    def init_parameters_from_x_and_z(self, x, z):
+        """ Get initial parameters for the sampler
+
+        Args:
+            x (ndarray): latent var
+            z (ndarray): latent var
+
+        Return:
+            init_parameters (SLDSParameters): init_parameters
+        """
+        # Check z is appropriate size
+        if np.shape(z)[0] != self.T:
+            raise ValueError("z must be length T = {0}".format(self.T))
+
+        if not np.issubdtype(z.dtype, np.integer):
+            raise ValueError("z must be integers, not {0}".format(z.dtype))
+
+        if np.max(z) >= self.num_states or np.min(z) < 0:
+            raise ValueError("z must be in (0, \ldots, {0}-1)".format(
+                self.num_states))
+
+        # Check x is appropriate size
+        if np.shape(x)[0] != self.T or np.shape(x)[1] != self.n:
+            raise ValueError("x must be size {0} not {1}".format(
+                (self.T, self.n), np.shape(x)))
+
+        # Init on Gibb Step
+        init_parameters = self.message_helper.parameters_gibbs_sample(
+                observations=self.observations,
+                latent_vars=dict(x=x, z=z),
+                forward_message=self.forward_message,
+                backward_message=self.backward_message,
+                prior=self.prior,
+                )
+
+        return init_parameters
+
+    def init_parameters_from_k_means(self, x=None, lags=[0,1], kmeans=None, **kwargs):
+        """ Get initial parameters for the sampler
+
+        Use KMeans on data (treating observations as independent)
+        Each point is concat(y[lag] for lag in lags)
+
+        Args:
+            x (ndarray): initialization of latent variables
+                default is to use observations
+            lags (list of indices): indices of lags to use for clustering
+            kmeans (sklearn model): e.g. sklearn.cluster.KMeans
+            **kwargs (dict): keyword args to pass to sklearn's kmean
+                "n_init" : int (default = 10)
+                "max_iter": int (default = 300)
+                "n_jobs" : int (default = 1)
+                See sklearn.cluster.KMeans for more
+
+
+        Returns:
+            init_parameters (SLDSParameters): init_parameters
+        """
+        from sklearn.cluster import KMeans, MiniBatchKMeans
+
+        # Run KMeans
+        if kmeans is None:
+            if self.T <= 10**6:
+                kmeans = KMeans(n_clusters = self.num_states, **kwargs)
+            else:
+                kmeans = MiniBatchKMeans(n_clusters = self.num_states, **kwargs)
+
+        X = self.observations.reshape((self.T, -1))
+        X_lagged = np.hstack([
+            X[max(lags)-lag:X.shape[0]-lag] for lag in lags
+        ])
+
+        z = kmeans.fit_predict(X=X_lagged)
+        if z.size < self.T:
+            z = np.concatenate([np.zeros(self.T-z.size, dtype=int), z])
+        if x is None:
+            x = self.observations
+
+        # Calculate Initial Param from KMeans init
+        init_parameters = self.init_parameters_from_x_and_z(x=x, z=z)
+
+        return init_parameters
+
     def init_sample_latent(self, init_method=None, init_burnin=0,
             parameters=None, observations=None, track_samples=True,
             z_init=None):

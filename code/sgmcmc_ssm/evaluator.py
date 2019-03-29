@@ -186,7 +186,8 @@ class SamplerEvaluator(BaseEvaluator):
             * variable (string)
             * value (double)
             * iteration (int)
-samples (pd.DataFrame): sampled params with columns
+
+        samples (pd.DataFrame): sampled params with columns
             * variable (string)
             * value (object)
             * iteration (int)
@@ -619,7 +620,7 @@ class OfflineEvaluator(BaseEvaluator):
             return self.eval_flag.iteration.iloc[0]
 
         if eval_order == "sequential":
-            index = np.argmax(self.eval_flag.eval_flag.ne(True))
+            index = np.argmax(self.eval_flag.eval_flag.ne(True).values)
             iteration = self.eval_flag.iteration.iloc[index]
         elif eval_order == "recursive":
             num_indices = self.eval_flag.shape[0]
@@ -697,8 +698,8 @@ def half_average_parameters_list(parameters_list):
         parameters_list = parameters_list.tolist()
     if len(parameters_list) == 0:
         return
-    Parameters = type(parameters_list[0])
-    parameters_dim = parameters_list[0].dim
+    Parameters = type(parameters_list[-1])
+    parameters_dim = parameters_list[-1].dim
 
     parameters_vectors = [None] * len(parameters_list)
     for ii, parameters in enumerate(parameters_list):
