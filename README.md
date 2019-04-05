@@ -1,26 +1,26 @@
-# Stochastic Gradient MCMC for Time Series SSMs
+# Stochastic Gradient MCMC for State Space Models
 
-This repo *will contain* the python code for our "SGMCMC for Time Series SSMs" paper [(link)](https://arxiv.org/abs/1810.09098).
+This repo contains the python code for stochastic gradient MCMC in state space models for the following papers: [Stochastic Gradient MCMC for SSMs](https://arxiv.org/abs/1810.09098) and ["Stochastic Gradient MCMC for Nonlinear SSMs"](https://arxiv.org/abs/1901.10568).
 
-Source code is in the `code/sgmcmc_ssm` folder.
-Scripts/Jupyter Notebooks for experiments _will be_ in the `experiments` folder.
+
+## Overview
+The `sgmcmc_ssm` folder contains the python module code.
+
+The `demo` folder contains python scripts that demonstrate the `sgmcmc_ssm` module API.
+These scripts must be run with `sgmcmc_ssm` on the PYTHONPATH.
+For example, running `ipython demo/<script name>.py` from this root folder.
+
 
 ## Installation
-Add the `code/sgmcmc_ssm` folder to the PYTHONPATH.
+Add the `sgmcmc_ssm` folder to the PYTHONPATH.
 
 Requirements:
 Python 3+, numpy, pandas, scipy, seaborn, joblib, scikit-learn,
 
 
 ## Usage Example
-
-`Under construction`
-
-See `code/README.md`
-
 Synthetic LGSSM Script Example
 ```
-cd code/
 ipython demo/lgssm_demo.py
 ```
 

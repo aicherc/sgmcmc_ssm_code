@@ -24,8 +24,9 @@ def pf(particles, log_weights, kernel):
     N = np.shape(particles)[0]
 
     # Multinomial Resampling
+    ancestor_log_weights = kernel.ancestor_log_weights(particles, log_weights)
     ancestor_indices = np.random.choice(range(N),
-            size=N, replace=True, p=log_normalize(log_weights))
+            size=N, replace=True, p=log_normalize(ancestor_log_weights))
     sampled_particles = particles[ancestor_indices]
 
     # Propose Descendents
@@ -67,6 +68,9 @@ def pf_filter(particles, log_weights, statistics, additive_statistic_func, kerne
                     x_t=particles[ancestor_indices],
                     x_next=new_particles,
                     )
+    additive_statistic *= kwargs.get('additive_scale', 1.0)
+
+
     new_statistics = statistics + \
             np.sum(additive_statistic.T * log_normalize(new_log_weights),
                     axis=1)
@@ -118,6 +122,7 @@ def poyiadjis_smoother(particles, log_weights, statistics,
             x_t=particles[indices],
             x_next=new_particles[new_indices],
             )
+    additive_statistic *= kwargs.get('additive_scale', 1.0)
 
     new_statistics = np.reshape(
         statistics[indices] + additive_statistic,
@@ -161,6 +166,7 @@ def nemeth_smoother(particles, log_weights, statistics,
                     x_t=particles[ancestor_indices],
                     x_next=new_particles,
                     )
+    additive_statistic *= kwargs.get('additive_scale', 1.0)
 
     new_statistics = (
             lambduh * statistics[ancestor_indices] +
@@ -230,6 +236,7 @@ def paris_smoother(particles, log_weights, statistics,
     xi_next = new_particles[indices]
     additive_statistic = additive_statistic_func(
             rewired_parents, xi_next)
+    additive_statistic *= kwargs.get('additive_scale', 1.0)
 
     new_statistics = np.reshape(
             rewired_statistics + additive_statistic,

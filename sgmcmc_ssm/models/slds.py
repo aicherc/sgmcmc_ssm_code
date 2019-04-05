@@ -15,7 +15,6 @@ from ..variable_mixins import (
 from ..sgmcmc_sampler import (
         SGMCMCSampler,
         SGMCMCHelper,
-        random_subsequence_and_buffers_helper,
         )
 from .._utils import (
         random_categorical,
@@ -273,7 +272,8 @@ class SLDSHelper(SGMCMCHelper):
         else:
             raise ValueError("Cannot marginalize both x and z")
 
-    def _forward_messages(self, observations, parameters, forward_message, x=None, z=None, **kwargs):
+    def _forward_messages(self, observations, parameters, forward_message,
+            x=None, z=None, **kwargs):
         if z is not None:
             if x is not None:
                 raise ValueError("Either x or z can be conditioned on")
@@ -322,7 +322,7 @@ class SLDSHelper(SGMCMCHelper):
             raise ValueError("Requires x or z be passed to condition on")
 
     def _x_forward_messages(self, observations, z, parameters, forward_message,
-            tqdm=None):
+            weights=None, tqdm=None):
         # Return list of forward messages Pr(x_{t} | y_{<=t}, z)
         # y is num_obs x m matrix
         num_obs = np.shape(observations)[0]
@@ -357,6 +357,7 @@ class SLDSHelper(SGMCMCHelper):
         for t in pbar:
             y_cur = observations[t]
             z_cur = z[t]
+            weight_t = 1.0 if weights is None else weights[t]
 
             # Calculate Predict Parameters
             J = np.linalg.solve(AtQinvA[z_cur] + precision, AtQinv[z_cur])
@@ -368,14 +369,15 @@ class SLDSHelper(SGMCMCHelper):
                     np.linalg.solve(pred_precision, pred_mean_precision))
             y_precision = Rinv - np.dot(CtRinv.T,
                     np.linalg.solve(CtRinvC + pred_precision, CtRinv))
-            log_constant = log_constant + \
+            log_constant += weight_t * (
                     -0.5 * np.dot(y_cur-y_mean,
                             np.dot(y_precision, y_cur-y_mean)) + \
                      0.5 * np.linalg.slogdet(y_precision)[1] + \
                     -0.5 * self.m * np.log(2*np.pi)
+                    )
 
             if z_prev is not None:
-                log_constant = log_constant + np.log(Pi[z_prev, z_cur])
+                log_constant += weight_t * np.log(Pi[z_prev, z_cur])
 
 
             # Calculate Filtered Parameters
@@ -397,7 +399,7 @@ class SLDSHelper(SGMCMCHelper):
         return forward_messages
 
     def _x_backward_messages(self, observations, z, parameters, backward_message,
-            tqdm=None):
+            weights=None, tqdm=None):
         # Return list of backward messages Pr(y_{>t} | x_t, z)
         # y is num_obs x n matrix
         num_obs = np.shape(observations)[0]
@@ -432,6 +434,7 @@ class SLDSHelper(SGMCMCHelper):
         for t in pbar:
             y_cur = observations[t]
             z_cur = z[t]
+            weight_t = 1.0 if weights is None else weights[t]
 
             # Helper Values
             xi = Qinv[z_cur] + precision + CtRinvC
@@ -439,15 +442,16 @@ class SLDSHelper(SGMCMCHelper):
             vi = mean_precision + np.dot(CtRinv, y_cur)
 
             # Calculate new parameters
-            log_constant = log_constant + \
+            log_constant += weight_t * (
                     -0.5 * self.m * np.log(2.0*np.pi) + \
                     np.sum(np.log(np.diag(LRinv))) + \
                     np.sum(np.log(np.diag(LQinv[z_cur]))) + \
                     -0.5 * np.linalg.slogdet(xi)[1] + \
                     -0.5 * np.dot(y_cur, np.dot(Rinv, y_cur)) + \
                     0.5 * np.dot(vi, np.linalg.solve(xi, vi))
+                    )
             if z_next is not None:
-                log_constant = log_constant + np.log(Pi[z_cur, z_next])
+                log_constant += weight_t * np.log(Pi[z_cur, z_next])
 
             new_mean_precision = np.dot(L.T, vi)
             new_precision = AtQinvA[z_cur] - np.dot(AtQinv[z_cur], L)
@@ -466,7 +470,8 @@ class SLDSHelper(SGMCMCHelper):
         return backward_messages
 
     def _x_marginal_loglikelihood(self, observations, z, parameters,
-            forward_message=None, backward_message=None, **kwargs):
+            forward_message=None, backward_message=None, weights=None,
+            **kwargs):
         # Run forward pass + combine with backward pass
         # y is num_obs x m matrix
 
@@ -476,21 +481,25 @@ class SLDSHelper(SGMCMCHelper):
                 z=z,
                 parameters=parameters,
                 forward_message=forward_message,
+                weights=weights,
                 **kwargs)
+
+        weight_T = 1.0 if weights is None else weights[-1]
 
         loglikelihood = x_marginal_loglikelihood_helper(
                 forward_pass, backward_message,
+                weight = weight_T,
                 )
         z_next = backward_message.get('z_next')
         z_prev = forward_pass.get('z_prev')
         if (z_next is not None) and (z_prev is not None):
-            loglikelihood = loglikelihood + np.log(
+            loglikelihood = loglikelihood + weight_T * np.log(
                     parameters.pi[z_prev, z_next])
 
         return loglikelihood
 
     def _x_gradient_marginal_loglikelihood(self, observations, z, parameters,
-            forward_message=None, backward_message=None,
+            forward_message=None, backward_message=None, weights=None,
             tqdm=None):
         Pi, expanded_pi = parameters.pi, parameters.expanded_pi
         A, LQinv, C, LRinv = \
@@ -539,6 +548,8 @@ class SLDSHelper(SGMCMCHelper):
             pbar = tqdm(pbar)
             pbar.set_description("emission gradient loglike")
         for t, (forward_t, backward_t, y_t) in enumerate(p_bar):
+            weight_t = 1.0 if weights is None else weights[t]
+
             # Pr(x_t | y)
             c_mean_precision = \
                     forward_t['x']['mean_precision'] + \
@@ -550,15 +561,15 @@ class SLDSHelper(SGMCMCHelper):
             xxt_mean = np.linalg.inv(c_precision) + np.outer(x_mean, x_mean)
 
             # Gradient of C
-            grad['C'] += np.outer(np.dot(Rinv, y_t), x_mean) + \
-                    -1.0 * np.dot(RinvC, xxt_mean)
+            grad['C'] += weight_t * (np.outer(np.dot(Rinv, y_t), x_mean) + \
+                    -1.0 * np.dot(RinvC, xxt_mean))
 
             # Gradient of LRinv
             #raise NotImplementedError("SHOULD CHECK THE MATH FOR LRINV")
             Cxyt = np.outer(np.dot(C, x_mean), y_t)
             CxxtCt = np.dot(C, np.dot(xxt_mean, C.T))
-            grad['LRinv'] += LRinv_diaginv + \
-                -1.0*np.dot(np.outer(y_t, y_t) - Cxyt - Cxyt.T + CxxtCt, LRinv)
+            grad['LRinv'] += weight_t * (LRinv_diaginv + \
+                -1.0*np.dot(np.outer(y_t, y_t) - Cxyt - Cxyt.T + CxxtCt, LRinv))
 
         # Transition Gradients
         p_bar = zip(forward_messages[0:-1], backward_messages[1:], observations, z)
@@ -566,6 +577,7 @@ class SLDSHelper(SGMCMCHelper):
             pbar = tqdm(pbar)
             pbar.set_description("transition gradient loglike")
         for t, (forward_t, backward_t, y_t, z_t) in enumerate(p_bar):
+            weight_t = 1.0 if weights is None else weights[t]
 
             # Pr(x_t, x_t+1 | y)
             c_mean_precision = \
@@ -591,30 +603,30 @@ class SLDSHelper(SGMCMCHelper):
             xnxnt_mean = c_cov[self.n:, self.n:] + np.outer(xn_mean, xn_mean)
 
             # Gradient of A
-            grad['A'][z_t] += np.dot(Qinv[z_t],
-                    xnxpt_mean - np.dot(A[z_t],xpxpt_mean))
+            grad['A'][z_t] += weight_t * (np.dot(Qinv[z_t],
+                    xnxpt_mean - np.dot(A[z_t],xpxpt_mean)))
 
             # Gradient of LQinv
             Axpxnt = np.dot(A[z_t], xnxpt_mean.T)
             AxpxptAt = np.dot(A[z_t], np.dot(xpxpt_mean, A[z_t].T))
-            grad['LQinv'][z_t] += LQinv_diaginv[z_t] + \
+            grad['LQinv'][z_t] += weight_t * (LQinv_diaginv[z_t] + \
                 -1.0*np.dot(xnxnt_mean - Axpxnt - Axpxnt.T + AxpxptAt,
-                        LQinv[z_t])
+                        LQinv[z_t]))
 
         # Latent State Gradients
         z_prev = forward_message.get('z_prev') if forward_message is not None else None
         for t, z_t in enumerate(z):
+            weight_t = 1.0 if weights is None else weights[t]
             if z_prev is not None:
                 if parameters.pi_type == "logit":
                     logit_pi_grad_t = -Pi[z_prev] + 0.0
                     logit_pi_grad_t[z_t] += 1.0
-                    grad['logit_pi'][z_prev] += logit_pi_grad_t
+                    grad['logit_pi'][z_prev] += weight_t * logit_pi_grad_t
                 elif parameters.pi_type  == "expanded":
                     expanded_pi_grad_t = - Pi[z_prev] / expanded_pi[z_prev]
                     expanded_pi_grad_t[z_t] += 1.0 / expanded_pi[z_prev, z_t]
-                    grad['expanded_pi'][z_prev] += expanded_pi_grad_t
+                    grad['expanded_pi'][z_prev] += weight_t * expanded_pi_grad_t
             z_prev = z_t
-
 
         return grad
 
@@ -791,7 +803,7 @@ class SLDSHelper(SGMCMCHelper):
         return
 
     def _z_forward_messages(self, observations, x, parameters, forward_message,
-            tqdm=None):
+            weights=None, tqdm=None):
         # Return list of forward messages Pr(z_{t}, y_{<=t}, x)
         # y is num_obs x m matrix
         num_obs = np.shape(observations)[0]
@@ -813,13 +825,15 @@ class SLDSHelper(SGMCMCHelper):
         for t in pbar:
             y_cur = observations[t]
             x_cur = x[t]
+            weight_t = 1.0 if weights is None else weights[t]
 
             # Log Pr(Y | X)
             LRinvTymCx = np.dot(LRinv.T, y_cur - np.dot(C, x_cur))
-            log_constant = log_constant + \
+            log_constant += weight_t * (
                     -0.5 * self.m * np.log(2*np.pi) + \
                     -0.5*np.dot(LRinvTymCx, LRinvTymCx) + \
                     np.sum(np.log(np.diag(LRinv)))
+                    )
 
             if x_prev is None:
                 # Assume Non-informative prior for y_0
@@ -830,7 +844,7 @@ class SLDSHelper(SGMCMCHelper):
                         x_cur, x_prev, parameters)
                 prob_vector = np.dot(prob_vector, Pi)
                 prob_vector = prob_vector * P_t
-                log_constant += log_t + np.log(np.sum(prob_vector))
+                log_constant += weight_t * (log_t + np.log(np.sum(prob_vector)))
                 prob_vector = prob_vector/np.sum(prob_vector)
 
             # Save Messages
@@ -845,7 +859,7 @@ class SLDSHelper(SGMCMCHelper):
         return forward_messages
 
     def _z_backward_messages(self, observations, x, parameters,
-            backward_message, tqdm=None):
+            backward_message, weights=None, tqdm=None):
         # Return list of backward messages Pr(y_{>t} | x_t)
         # y is num_obs x n matrix
         num_obs = np.shape(observations)[0]
@@ -867,17 +881,19 @@ class SLDSHelper(SGMCMCHelper):
         for t in pbar:
             y_cur = observations[t]
             x_cur = x[t]
+            weight_t = 1.0 if weights is None else weights[t]
 
             # Log Pr(Y_cur | X_cur )
             LRinvTymCx = np.dot(LRinv.T, y_cur - np.dot(C, x_cur))
-            log_constant = log_constant + \
+            log_constant = weight_t * (
                     -0.5 * self.m * np.log(2*np.pi) + \
                     -0.5*np.dot(LRinvTymCx, LRinvTymCx) + \
                     np.sum(np.log(np.diag(LRinv)))
+                    )
 
             if x_next is None:
                 prob_vector = np.dot(Pi, prob_vector)
-                log_constant = log_constant + np.log(np.sum(prob_vector))
+                log_constant += weight_t * np.log(np.sum(prob_vector))
                 prob_vector = prob_vector/np.sum(prob_vector)
             else:
                 # Log Pr(X_next | X_cur)
@@ -885,8 +901,8 @@ class SLDSHelper(SGMCMCHelper):
                         x_next, x_cur, parameters)
                 prob_vector = P_t * prob_vector
                 prob_vector = np.dot(Pi, prob_vector)
-                log_constant = log_constant + log_t + \
-                        np.log(np.sum(prob_vector))
+                log_constant += weight_t * (log_t + \
+                        np.log(np.sum(prob_vector)))
                 prob_vector = prob_vector/np.sum(prob_vector)
 
 
@@ -900,7 +916,8 @@ class SLDSHelper(SGMCMCHelper):
         return backward_messages
 
     def _z_marginal_loglikelihood(self, observations, x, parameters,
-            forward_message=None, backward_message=None, **kwargs):
+            forward_message=None, backward_message=None, weights=None,
+            **kwargs):
         # Run forward pass + combine with backward pass
         # y is num_obs x m matrix
 
@@ -910,6 +927,7 @@ class SLDSHelper(SGMCMCHelper):
                 x=x,
                 parameters=parameters,
                 forward_message=forward_message,
+                weights=weights,
                 **kwargs)
 
         Pi = parameters.pi
@@ -918,22 +936,24 @@ class SLDSHelper(SGMCMCHelper):
         prob_vector = forward_pass['z']['prob_vector']
         log_constant = forward_pass['z']['log_constant']
         prob_vector = np.dot(prob_vector, Pi)
+        weight_T = 1.0 if weights is None else weights[-1]
+
         if (x_cur is not None) and (x_prev is not None):
             P_t, log_t = self._likelihoods(
                     x_cur, x_prev, parameters,
                 )
             prob_vector = P_t * prob_vector
-            log_constant = log_constant + log_t
+            log_constant += weight_T * log_t
 
-        log_constant = log_constant + backward_message['z']['log_constant']
+        log_constant += weight_T * backward_message['z']['log_constant']
         likelihood = np.dot(prob_vector,
                 backward_message['z']['likelihood_vector'])
-        loglikelihood = np.log(likelihood) + log_constant
+        loglikelihood = weight_T * np.log(likelihood) + log_constant
 
         return loglikelihood
 
     def _z_gradient_marginal_loglikelihood(self, observations, x, parameters,
-            forward_message=None, backward_message=None,
+            forward_message=None, backward_message=None, weights=None,
             tqdm=None):
         Pi, expanded_pi = parameters.pi, parameters.expanded_pi
         A, LQinv, C, LRinv = \
@@ -978,6 +998,7 @@ class SLDSHelper(SGMCMCHelper):
             r_t = forward_t['z']['prob_vector']
             s_t = np.dot(r_t, Pi)
             q_t = backward_t['z']['likelihood_vector']
+            weight_t = 1.0 if weights is None else weights[t]
 
             x_prev = forward_t.get('x_prev', None)
             x_cur = x_t
@@ -996,10 +1017,10 @@ class SLDSHelper(SGMCMCHelper):
             # Grad for pi
             if parameters.pi_type == "logit":
                 # Gradient of logit_pi
-                grad['logit_pi'] += joint_post - \
-                        np.diag(np.sum(joint_post, axis=1)).dot(Pi)
+                grad['logit_pi'] += weight_t * (joint_post - \
+                        np.diag(np.sum(joint_post, axis=1)).dot(Pi))
             elif parameters.pi_type == "expanded":
-                grad['expanded_pi'] += np.array([
+                grad['expanded_pi'] += weight_t * np.array([
                     (expanded_pi[k]**-1)*(
                         joint_post[k] - np.sum(joint_post[k])*Pi[k])
                     for k in range(self.num_states)
@@ -1015,17 +1036,17 @@ class SLDSHelper(SGMCMCHelper):
                     diff_k = x_cur - A_k.dot(x_prev)
                     grad['A'][k] = (
                             np.outer(Qinv_k.dot(diff_k), x_prev)
-                            ) * marg_post[k]
+                            ) * marg_post[k] * weight_t
                     grad['LQinv'][k] = (
                             (Q_k - np.outer(diff_k, diff_k)).dot(LQinv_k)
-                            ) * marg_post[k]
+                            ) * marg_post[k] * weight_t
 
 
             # Grad for C and LRinv
-            grad['C'] += np.outer(np.dot(Rinv, y_t-np.dot(C,x_t)), x_t)
-            grad['LRinv'] += LRinv_Tinv + \
+            grad['C'] += weight_t * np.outer(np.dot(Rinv, y_t-np.dot(C,x_t)), x_t)
+            grad['LRinv'] += weight_t * (LRinv_Tinv + \
                 -1.0*np.dot(np.outer(y_t-np.dot(C,x_t), y_t-np.dot(C,x_t)),
-                        LRinv)
+                        LRinv))
 
         return grad
 
@@ -1191,7 +1212,8 @@ class SLDSHelper(SGMCMCHelper):
         return loglikelihoods
 
     def _complete_data_loglikelihood(self, observations, x, z, parameters,
-            forward_message=None, backward_message=None, **kwargs):
+            forward_message=None, backward_message=None, weights=None,
+            **kwargs):
         # y is num_obs x m matrix
         log_constant = 0.0
         Pi = parameters.pi
@@ -1203,24 +1225,28 @@ class SLDSHelper(SGMCMCHelper):
         z_prev = forward_message.get('z_prev')
         x_prev = forward_message.get('x_prev')
         for t, (y_t, x_t, z_t) in enumerate(zip(observations, x, z)):
+            weight_t = 1.0 if weights is None else weights[t]
+
             # Pr(Z_t | Z_t-1)
             if z_prev is not None:
-                log_constant = log_constant + np.log(Pi[z_prev, z_t])
+                log_constant += weight_t * np.log(Pi[z_prev, z_t])
 
             # Pr(X_t | X_t-1)
             if (z_prev is not None) and (x_prev is not None):
                 diffLQinv = np.dot(x_t - np.dot(A[z_t],x_prev), LQinv[z_t])
-                log_constant = log_constant + \
+                log_constant += weight_t * (
                         -0.5 * self.n * np.log(2*np.pi) + \
                         -0.5 * np.dot(diffLQinv, diffLQinv) + \
                         np.sum(np.log(np.diag(LQinv[z_t])))
+                        )
 
             # Pr(Y_t | X_t)
             LRinvTymCx = np.dot(LRinv.T, y_t - np.dot(C, x_t))
-            log_constant = log_constant + \
+            log_constant += weight_t * (
                     -0.5 * self.m * np.log(2*np.pi) + \
                     -0.5*np.dot(LRinvTymCx, LRinvTymCx) + \
                     np.sum(np.log(np.diag(LRinv)))
+                    )
 
             z_prev = z_t
             x_prev = x_t
@@ -1229,7 +1255,7 @@ class SLDSHelper(SGMCMCHelper):
 
     def _gradient_complete_data_loglikelihood(self, observations, x, z,
             parameters,
-            forward_message=None, backward_message=None,
+            forward_message=None, backward_message=None, weights=None,
             tqdm=None):
         if forward_message is None:
             forward_message = {}
@@ -1252,35 +1278,38 @@ class SLDSHelper(SGMCMCHelper):
         # Latent State Gradients
         z_prev = forward_message.get('z_prev')
         for t, z_t in enumerate(z):
+            weight_t = 1.0 if weights is None else weights[t]
             if z_prev is not None:
                 if parameters.pi_type == "logit":
                     logit_pi_grad_t = -Pi[z_prev] + 0.0
                     logit_pi_grad_t[z_t] += 1.0
-                    grad['logit_pi'][z_prev] += logit_pi_grad_t
+                    grad['logit_pi'][z_prev] += weight_t * logit_pi_grad_t
                 elif parameters.pi_type  == "expanded":
                     expanded_pi_grad_t = - Pi[z_prev] / expanded_pi[z_prev]
                     expanded_pi_grad_t[z_t] += 1.0 / expanded_pi[z_prev, z_t]
-                    grad['expanded_pi'][z_prev] += expanded_pi_grad_t
+                    grad['expanded_pi'][z_prev] += weight_t * expanded_pi_grad_t
             z_prev = z_t
 
         # Transition Gradients
         x_prev = forward_message.get('x_prev')
         for t, (x_t, z_t) in enumerate(zip(x, z)):
+            weight_t = 1.0 if weights is None else weights[t]
             if x_prev is not None:
                 A_k = A[z_t]
                 diff = x_t - np.dot(A_k, x_prev)
-                grad['A'][z_t] += np.outer(
+                grad['A'][z_t] += weight_t * np.outer(
                     np.dot(Qinv[z_t], diff), x_prev)
-                grad['LQinv'][z_t] += LQinv_Tinv[z_t] + \
-                    -1.0*np.dot(np.outer(diff, diff), LQinv[z_t])
+                grad['LQinv'][z_t] += weight_t * (LQinv_Tinv[z_t] + \
+                    -1.0*np.dot(np.outer(diff, diff), LQinv[z_t]))
             x_prev = x_t
 
         # Emission Gradients
         for t, (x_t, y_t) in enumerate(zip(x, observations)):
+            weight_t = 1.0 if weights is None else weights[t]
             diff = y_t - np.dot(C, x_t)
-            grad['C'] += np.outer(np.dot(Rinv, diff), x_t)
-            grad['LRinv'] += LRinv_Tinv + \
-                -1.0*np.dot(np.outer(diff, diff), LRinv)
+            grad['C'] += weight_t * np.outer(np.dot(Rinv, diff), x_t)
+            grad['LRinv'] += weight_t * (LRinv_Tinv + \
+                -1.0*np.dot(np.outer(diff, diff), LRinv))
 
         return grad
 
@@ -1347,7 +1376,8 @@ class SLDSHelper(SGMCMCHelper):
                 )
         return sufficient_stat
 
-def x_marginal_loglikelihood_helper(forward_message, backward_message):
+def x_marginal_loglikelihood_helper(forward_message, backward_message,
+        weight=1.0):
     # Calculate the marginal loglikelihood of forward + backward message
     f_mean_precision = forward_message['x']['mean_precision']
     f_precision = forward_message['x']['precision']
@@ -1355,7 +1385,7 @@ def x_marginal_loglikelihood_helper(forward_message, backward_message):
     c_precision = f_precision + backward_message['x']['precision']
 
     log_constant = forward_message['x']['log_constant'] + \
-            backward_message['x']['log_constant'] + \
+            (backward_message['x']['log_constant'] + \
             +0.5 * np.linalg.slogdet(f_precision)[1] + \
             -0.5 * np.linalg.slogdet(c_precision)[1] + \
             -0.5 * np.dot(f_mean_precision,
@@ -1364,6 +1394,7 @@ def x_marginal_loglikelihood_helper(forward_message, backward_message):
             0.5 * np.dot(c_mean_precision,
                 np.linalg.solve(c_precision, c_mean_precision)
                 )
+            ) * weight
     return log_constant
 
 class SLDSSampler(SGMCMCSampler):
@@ -1693,54 +1724,6 @@ class SLDSSampler(SGMCMCSampler):
         self.parameters = new_parameters
         return self.parameters
 
-    def exact_loglikelihood(self):
-        raise NotImplementedError("SLDS does not have closed form marginal loglikelihood")
-
-    def _random_subsequence_and_buffers(self, buffer_length,
-            subsequence_length=-1):
-        """ Get a subsequence and buffer sequence
-
-        Args:
-            buffer_length (int) nonnegative
-            subsequence_length (int) defaults to self.subsequence_length
-
-        Returns:
-            subsequence (dict): contains
-                'buffer' (ndarray) buffer_length + subsequence_length by m
-                'left_buffer_start' (int) index in observations
-                'right_buffer_end' (int) index in observations
-                'subsequence_start' (int) index in observations
-                'subsequence_end' (int) index in observations
-        """
-        if buffer_length == -1:
-            buffer_length = self.T
-        if subsequence_length == -1:
-            subsequence_start = 0
-            subsequence_end = self.T
-        elif self.T - subsequence_length <= 0:
-            subsequence_start = 0
-            subsequence_end = self.T
-        else:
-            subsequence_start, subsequence_end = \
-                    random_subsequence_and_buffers_helper(
-                            subsequence_length=subsequence_length,
-                            T=self.T,
-                            options=self.options,
-                            )
-
-        left_buffer_start = max(0, subsequence_start - buffer_length)
-        right_buffer_end = min(self.T, subsequence_end + buffer_length)
-
-        buffer_ = self.observations[left_buffer_start:right_buffer_end]
-        out = dict(
-            buffer=buffer_,
-            subsequence_start = subsequence_start,
-            subsequence_end = subsequence_end,
-            left_buffer_start = left_buffer_start,
-            right_buffer_end = right_buffer_end,
-            )
-        return out
-
     def noisy_loglikelihood(self, kind="complete",
             subsequence_length=-1,
             minibatch_size=1, buffer_length=10,
@@ -1771,13 +1754,13 @@ class SLDSSampler(SGMCMCSampler):
             # Get Subsequence and Buffer
             subsequence = self._random_subsequence_and_buffers(buffer_length,
                     subsequence_length)
-
+            buffer_ = self.observations[subsequence['left_buffer_start']:
+                    subsequence['right_buffer_end']]
+            subsequence['buffer'] = buffer_
 
             if latent_init == "from_vector":
-                z_init = kwargs['z_init'][
-                        subsequence['left_buffer_start']:\
-                                subsequence['right_buffer_end']
-                                ]
+                z_init = kwargs['z_init'][subsequence['left_buffer_start']:
+                        subsequence['right_buffer_end']]
             else:
                 z_init = None
 
@@ -1786,7 +1769,7 @@ class SLDSSampler(SGMCMCSampler):
             latent_buffer = self.init_sample_latent(
                     init_method=latent_init,
                     init_burnin=latent_burnin,
-                    observations=subsequence['buffer'],
+                    observations=buffer_,
                     track_samples=False,
                     z_init=z_init,
                     )
@@ -1797,7 +1780,7 @@ class SLDSSampler(SGMCMCSampler):
                     latent_buffer = self.sample_latent(
                             x=latent_buffer['x'], z=latent_buffer['z'],
                             num_rep=latent_thinning,
-                            observations=subsequence['buffer'],
+                            observations=buffer_,
                             track_samples=False,
                         )
                 # Subsequence Objective Estimate
@@ -1805,13 +1788,10 @@ class SLDSSampler(SGMCMCSampler):
                         subsequence=subsequence,
                         x_buffer=latent_buffer['x'],
                         z_buffer=latent_buffer['z'],
-                        kind=kind) / (
-                        subsequence['subsequence_end'] -
-                        subsequence['subsequence_start']
-                        )
+                        kind=kind)
 
         # Average over Minibatch + Draws
-        noisy_loglike *= self.T/(1.0 * minibatch_size*latent_draws)
+        noisy_loglike *= 1.0/(minibatch_size*latent_draws)
         return noisy_loglike
 
     def _subsequence_objective(self, subsequence, x_buffer, z_buffer,
@@ -1833,6 +1813,7 @@ class SLDSSampler(SGMCMCSampler):
                     observations=y, x=x, z=z, parameters=self.parameters,
                     forward_message=forward_message,
                     backward_message=self.backward_message,
+                    weights=subsequence['weights'],
                     )
         elif kind == "x_marginal":
             forward_message = (self
@@ -1849,6 +1830,7 @@ class SLDSSampler(SGMCMCSampler):
                     observations=y, x=x, parameters=self.parameters,
                     forward_message=forward_message,
                     backward_message=self.backward_message,
+                    weights=subsequence['weights'],
                     )
         elif kind == "z_marginal":
             forward_message = (self
@@ -1865,6 +1847,7 @@ class SLDSSampler(SGMCMCSampler):
                     observations=y, z=z, parameters=self.parameters,
                     forward_message=forward_message,
                     backward_message=self.backward_message,
+                    weights=subsequence['weights'],
                     )
         else:
             raise ValueError("Unrecognized kind = {0}".format(kind))
@@ -1942,7 +1925,9 @@ class SLDSSampler(SGMCMCSampler):
             # Get Subsequence and Buffer
             subsequence = self._random_subsequence_and_buffers(buffer_length,
                     subsequence_length=subsequence_length)
-
+            buffer_ = self.observations[subsequence['left_buffer_start']:
+                    subsequence['right_buffer_end']]
+            subsequence['buffer'] = buffer_
 
             if latent_init == "from_vector":
                 z_init = kwargs['z_init'][
@@ -1979,11 +1964,6 @@ class SLDSSampler(SGMCMCSampler):
                         x_buffer=latent_buffer['x'],
                         z_buffer=latent_buffer['z'],
                         kind=kind,
-                        )
-                for var in noisy_grad:
-                    noisy_grad[var] += noisy_grad_add[var] * 1.0*self.T/(
-                        subsequence['subsequence_end'] -
-                        subsequence['subsequence_start']
                         )
 
         for var in noisy_grad:
@@ -2030,6 +2010,7 @@ class SLDSSampler(SGMCMCSampler):
                         parameters=self.parameters,
                         forward_message=forward_message,
                         backward_message=backward_message,
+                        weights=subsequence['weights'],
                     ))
 
         elif kind == "x_marginal":
@@ -2060,6 +2041,7 @@ class SLDSSampler(SGMCMCSampler):
                         parameters=self.parameters,
                         forward_message=forward_message,
                         backward_message=backward_message,
+                        weights=subsequence['weights'],
                     ))
 
         elif kind == "z_marginal":
@@ -2096,6 +2078,7 @@ class SLDSSampler(SGMCMCSampler):
                         parameters=self.parameters,
                         forward_message=forward_message,
                         backward_message=backward_message,
+                        weights=subsequence['weights'],
                         ))
         else:
             raise ValueError("Unrecognized kind = {0}".format(kind))

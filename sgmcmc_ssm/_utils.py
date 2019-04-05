@@ -136,7 +136,8 @@ def sym(mat):
         return (mat + np.swapaxes(mat, -1, -2))/2.0
 
 # Stability of VAR(p)
-def varp_stability_projection(A, eigenvalue_cutoff=0.9999, logger=logger):
+def varp_stability_projection(A, eigenvalue_cutoff=0.9999,
+        var_name='A', logger=logger):
     """ Threshold VAR(p) A to have stable eigenvalues """
     m, mp = np.shape(A)
     p = mp//m
@@ -146,16 +147,16 @@ def varp_stability_projection(A, eigenvalue_cutoff=0.9999, logger=logger):
         lambduhs = np.linalg.eig(F)[0]
         largest_eigenvalue = np.max(np.abs(lambduhs))
         if largest_eigenvalue > eigenvalue_cutoff:
-            logger.info("Thresholding Largest Eigenval F: {0} > {1}".format(
-                largest_eigenvalue, eigenvalue_cutoff))
+            logger.info("Thresholding Largest Eigenval F({2}): {0} > {1}".format(
+                largest_eigenvalue, eigenvalue_cutoff, var_name))
             for ii in range(p):
                 A_stable[:, m*ii:m*(ii+1)] *= \
                         (eigenvalue_cutoff/largest_eigenvalue)**(ii+1)
     else:
         largest_eigenvalue = np.abs(A[0,0])
         if largest_eigenvalue > eigenvalue_cutoff:
-            logger.info("Thresholding |A|: {0} > {1}".format(
-                largest_eigenvalue, eigenvalue_cutoff))
+            logger.info("Thresholding |{2}|: {0} > {1}".format(
+                largest_eigenvalue, eigenvalue_cutoff, var_name))
             A_stable *= (eigenvalue_cutoff/largest_eigenvalue)
 
     return A_stable

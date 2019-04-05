@@ -1297,8 +1297,7 @@ def setup_options(experiment_folder, arg_list):
 
 def get_model_sampler_prior(model_type):
     if model_type == "LGSSM":
-        from paris.pf_helper import PFLGSSMHelper
-        Sampler = functools.partial(LGSSMSampler, Helper=PFLGSSMHelper)
+        Sampler = LGSSMSampler
         Prior = LGSSMPrior
     else:
         raise NotImplementedError()

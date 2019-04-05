@@ -127,7 +127,7 @@ class HMMHelper(SGMCMCHelper):
         return
 
     def _forward_messages(self, observations, parameters, forward_message,
-            tqdm=None):
+            weights=None, tqdm=None):
         # Return list of forward messages
         # y is num_obs x m matrix
         num_obs = np.shape(observations)[0]
@@ -144,10 +144,11 @@ class HMMHelper(SGMCMCHelper):
             pbar.set_description("forward messages")
         for t in pbar:
             y_cur = observations[t]
+            weight_t = 1.0 if weights is None else weights[t]
             P_t, log_t = self._likelihoods(y_cur, parameters=parameters)
             prob_vector = np.dot(prob_vector, Pi)
             prob_vector = prob_vector * P_t
-            log_constant = log_constant + log_t + np.log(np.sum(prob_vector))
+            log_constant += weight_t * (log_t + np.log(np.sum(prob_vector)))
             prob_vector = prob_vector/np.sum(prob_vector)
 
             forward_messages[t+1] = {
@@ -157,7 +158,7 @@ class HMMHelper(SGMCMCHelper):
         return forward_messages
 
     def _backward_messages(self, observations, parameters, backward_message,
-            tqdm=None):
+            weights=None, tqdm=None):
         # Return list of backward messages
         # y is num_obs x m matrix
         num_obs = np.shape(observations)[0]
@@ -175,11 +176,12 @@ class HMMHelper(SGMCMCHelper):
             pbar.set_description("backward messages")
         for t in pbar:
             y_cur = observations[t]
+            weight_t = 1.0 if weights is None else weights[t]
             P_t, log_t = self._likelihoods(y_cur=y_cur,
                     parameters=parameters)
             prob_vector = P_t * prob_vector
             prob_vector = np.dot(Pi, prob_vector)
-            log_constant = log_constant + log_t + np.log(np.sum(prob_vector))
+            log_constant += weight_t * (log_t + np.log(np.sum(prob_vector)))
             prob_vector = prob_vector/np.sum(prob_vector)
             backward_messages[t] = {
                 'likelihood_vector': prob_vector,
@@ -189,7 +191,8 @@ class HMMHelper(SGMCMCHelper):
         return backward_messages
 
     def marginal_loglikelihood(self, observations, parameters,
-            forward_message=None, backward_message=None, **kwargs):
+            forward_message=None, backward_message=None, weights=None,
+            **kwargs):
         # Run forward pass + combine with backward pass
         # y is num_obs x p x m matrix
         if forward_message is None:
@@ -202,15 +205,16 @@ class HMMHelper(SGMCMCHelper):
                 observations=observations,
                 parameters=parameters,
                 forward_message=forward_message,
+                weights=weights,
                 **kwargs)
 
-        log_constant = forward_pass['log_constant'] + \
-                backward_message['log_constant']
         likelihood = np.dot(
                 forward_pass['prob_vector'],
                 backward_message['likelihood_vector'],
                 )
-        loglikelihood = np.log(likelihood) + log_constant
+        weight_t = 1.0 if weights is None else weights[-1]
+        loglikelihood = forward_pass['log_constant'] + \
+            weight_t * (np.log(likelihood) + backward_message['log_constant'])
         return loglikelihood
 
     def predictive_loglikelihood(self, observations, parameters, lag=10,
@@ -491,7 +495,7 @@ class GaussHMMHelper(HMMHelper):
 
     def gradient_marginal_loglikelihood(self, observations, parameters,
             forward_message=None, backward_message=None,
-            tqdm=None):
+            weights=None, tqdm=None):
         # Forward Pass
         forward_messages = self.forward_pass(observations, parameters,
                 forward_message, include_init_message=True)
@@ -519,6 +523,8 @@ class GaussHMMHelper(HMMHelper):
             s_t = np.dot(r_t, Pi)
             q_t = backward_t['likelihood_vector']
 
+            weight_t = 1.0 if weights is None else weights[t]
+
             # Calculate P_t = Pr(y_t | z_t)
             y_cur = observations[t]
             P_t, _ = self._likelihoods(
@@ -534,10 +540,10 @@ class GaussHMMHelper(HMMHelper):
             # Grad for pi
             if parameters.pi_type == "logit":
                 # Gradient of logit_pi
-                grad['logit_pi'] += joint_post - \
-                        np.diag(np.sum(joint_post, axis=1)).dot(Pi)
+                grad['logit_pi'] += weight_t * (joint_post - \
+                        np.diag(np.sum(joint_post, axis=1)).dot(Pi))
             elif parameters.pi_type == "expanded":
-                grad['expanded_pi'] += np.array([
+                grad['expanded_pi'] += weight_t * np.array([
                     (expanded_pi[k]**-1)*(
                         joint_post[k] - np.sum(joint_post[k])*Pi[k])
                     for k in range(self.num_states)
@@ -549,8 +555,8 @@ class GaussHMMHelper(HMMHelper):
             for k, mu_k, LRinv_k, Rinv_k, R_k in zip(
                     range(self.num_states), mu, LRinv, Rinv, R):
                 diff_k = y_cur - mu_k
-                grad['mu'][k] += Rinv_k.dot(diff_k) * marg_post[k]
-                grad['LRinv'][k] += (
+                grad['mu'][k] += weight_t * Rinv_k.dot(diff_k) * marg_post[k]
+                grad['LRinv'][k] += weight_t * (
                         (R_k - np.outer(diff_k, diff_k)).dot(LRinv_k)
                         ) * marg_post[k]
         return grad

@@ -2,7 +2,7 @@
 Create Setup Script for Demo Experiment
 
 Usage:
-  0. Change `project_root` in this file to match the directory of `sgmcmc_nonlinear_ssm/code`
+  0. Change `project_root` in this file to match the directory of `sgmcmc_nonlinear_ssm`
   1. Run this script, which will create a `setup.sh` script at `<experiment_folder>`
         (default is `./scratch/<experiment_name>/scripts/setup.sh`)
         This will generate the train + test data, initializations + other scripts
@@ -32,17 +32,16 @@ logging.basicConfig(
         )
 
 ## Set Experiment Name
-experiment_name = "svm_demo"
+experiment_name = "lgssm_demo"
 
 ## Filesystem Paths
 conda_env_name = None
-project_root = None # Must be specified (path to "/sgmcmc_ssm_code/code/")
-
+project_root = "./" # Must be specified (path to "/sgmcmc_ssm_code/")
 os.chdir(project_root)
 sys.path.append(os.getcwd()) # Fix Python Path
 
 # Paths relative to project root
-current_folder = os.path.join("nonlinear_ssm_pf_experiment_scripts",, "svm")
+current_folder = os.path.join("nonlinear_ssm_pf_experiment_scripts", "lgssm")
 python_script_path = os.path.join(current_folder,"driver.py")
 experiment_folder = os.path.join("scratch", experiment_name) # Path to output
 
@@ -52,25 +51,26 @@ T = 1000 # Training set size
 T_test = 1000 # Test set size
 init_methods = ['prior', 'truth'] * 1 # number of intializations + how they are initialized
 
-# SVM parameters
-from sgmcmc_ssm.models.svm import (
-        SVMParameters,
+# LGSSM parameters
+from sgmcmc_ssm.models.lgssm import (
+        LGSSMParameters,
         )
 
-param_name = 'A=0.95,Q=0.5,R=0.5'
-A = np.eye(1)*0.95
-Q = np.eye(1)*0.5
-R = np.eye(1)*0.5
+param_name = 'A=0.9,Q=0.1,R=1'
+A = np.eye(1)*0.9
+Q = np.eye(1)*0.1
+C = np.eye(1)
+R = np.eye(1)
 
 LQinv = np.linalg.cholesky(np.linalg.inv(Q))
 LRinv = np.linalg.cholesky(np.linalg.inv(R))
-parameters = SVMParameters(A=A, LQinv=LQinv, LRinv=LRinv)
+parameters = LGSSMParameters(A=A, LQinv=LQinv, C=C, LRinv=LRinv)
 parameters.project_parameters()
 parameter_list = {param_name: parameters}
 
 # Sampler Args
 common_sampler_args = {
-        'inference_method': ['SGLD'],
+        'inference_method': ['SGRLD'],
         'subsequence_length': [40],
         'buffer_length': [10],
         'minibatch_size': [1],
@@ -82,23 +82,44 @@ common_sampler_args = {
 
 sampler_args = [
     {
-        'method_name': ['POYIADJIS_N_1000'],
-        'kind': ['pf'],
-        'pf_kwargs': [dict(pf='poyiadjis_N', N=1000)],
+        'method_name': ['Gibbs'],
+        'inference_method': ['Gibbs'],
+        'epsilon': [-1],
+        'minibatch_size': [-1],
+        'subsequence_length': [-1],
+        'buffer_length': [-1],
+        'steps_per_iteration': [1],
+        'max_time': [300],
+    },
+    {
+        'method_name': ['KF'],
+        'kind': ['marginal'],
         **common_sampler_args
     },
     {
-        'method_name': ['NEMETH_1000'],
-        'kind': ['pf'],
-        'pf_kwargs': [dict(pf='nemeth', N=1000, lambduh=0.95)],
+        'method_name': ['MC_100'],
+        'kind': ['complete'],
+        'num_samples': [100],
         **common_sampler_args
     },
+#    {
+#        'method_name': ['MC_1000'],
+#        'kind': ['complete'],
+#        'num_samples': [1000],
+#        **common_sampler_args
+#    },
     {
-        'method_name': ['PARIS_100'],
+        'method_name': ['NEMETH_100'],
         'kind': ['pf'],
-        'pf_kwargs': [dict(pf='paris', N=100, Ntilde=2)],
+        'pf_kwargs': [dict(pf='nemeth', N=100, lambduh=0.95)],
         **common_sampler_args
     },
+#    {
+#        'method_name': ['PARIS_100'],
+#        'kind': ['pf'],
+#        'pf_kwargs': [dict(pf='paris', N=100, Ntilde=2)],
+#        **common_sampler_args
+#    },
 #    {
 #        'method_name': ['POYIADJIS_N2_100'],
 #        'kind': ['pf'],

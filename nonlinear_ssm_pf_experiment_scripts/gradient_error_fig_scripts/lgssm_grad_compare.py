@@ -36,10 +36,11 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
     A = np.eye(1) * pars[0]
     Q = np.eye(1) * pars[1]
     R = np.eye(1) * pars[2]
+    C = np.eye(1)
 
     LQinv = np.linalg.cholesky(np.linalg.inv(Q))
     LRinv = np.linalg.cholesky(np.linalg.inv(R))
-    parameters = LGSSMParameters(A=A, LQinv=LQinv, LRinv=LRinv)
+    parameters = LGSSMParameters(A=A, C=C, LQinv=LQinv, LRinv=LRinv)
 
     def convert_gradient(grad_dict):
         return [
@@ -63,11 +64,11 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
         pbar = tqdm(range(10))
         pbar.set_description('Number of Reps')
         buffer_size = L
-        forward_message = lgssm_helper.forward_message(
+        forward_message = helper.forward_message(
                 observations=observations[:t0],
                 parameters=parameters,
                 )
-        backward_message = lgssm_helper.backward_message(
+        backward_message = helper.backward_message(
                 observations=observations[t0+L:],
                 parameters=parameters,
                 )
@@ -123,15 +124,15 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
 
                 # Exact KF Smoother
                 start_time = time.time()
-                forward_message = lgssm_helper.forward_message(
+                forward_message = helper.forward_message(
                         observations=pf_kwargs['observations'][:buffer_size],
                         parameters=parameters,
                         )
-                backward_message = lgssm_helper.backward_message(
+                backward_message = helper.backward_message(
                         observations=pf_kwargs['observations'][L+buffer_size:],
                         parameters=parameters,
                         )
-                grad_dict = lgssm_helper.gradient_marginal_loglikelihood(
+                grad_dict = helper.gradient_marginal_loglikelihood(
                         observations=pf_kwargs['observations'][buffer_size:L+buffer_size],
                         parameters=parameters,
                         tqdm=tqdm,

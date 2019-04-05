@@ -74,7 +74,6 @@ class LGSSMParameters(RSingleMixin, QSingleMixin, CSingleMixin, ASingleMixin,
             tau = np.linalg.inv(self.var_dict['LRinv'].T)
         return tau
 
-
 class LGSSMPrior(RSinglePrior, QSinglePrior, CSinglePrior, ASinglePrior,
         BasePrior):
     """ LGSSM Prior
@@ -189,7 +188,7 @@ class LGSSMHelper(SGMCMCHelper):
         return
 
     def _forward_messages(self, observations, parameters, forward_message,
-            tqdm=None):
+            weights=None, tqdm=None):
         # Return list of forward messages Pr(x_{t} | y_{<=t})
         # y is num_obs x m matrix
         num_obs = np.shape(observations)[0]
@@ -217,6 +216,7 @@ class LGSSMHelper(SGMCMCHelper):
             pbar.set_description("forward messages")
         for t in pbar:
             y_cur = observations[t]
+            weight_t = 1.0 if weights is None else weights[t]
 
             # Calculate Predict Parameters
             J = np.linalg.solve(AtQinvA + precision, AtQinv)
@@ -228,11 +228,11 @@ class LGSSMHelper(SGMCMCHelper):
                     np.linalg.solve(pred_precision, pred_mean_precision))
             y_precision = Rinv - np.dot(CtRinv.T,
                     np.linalg.solve(CtRinvC + pred_precision, CtRinv))
-            log_constant = log_constant + \
-                    -0.5 * np.dot(y_cur-y_mean,
+            log_c = (-0.5 * np.dot(y_cur-y_mean,
                             np.dot(y_precision, y_cur-y_mean)) + \
                      0.5 * np.linalg.slogdet(y_precision)[1] + \
-                    -0.5 * self.m * np.log(2*np.pi)
+                    -0.5 * self.m * np.log(2*np.pi))
+            log_constant += log_c * weight_t
 
             # Calculate Filtered Parameters
             new_mean_precision = pred_mean_precision + np.dot(CtRinv, y_cur)
@@ -249,7 +249,7 @@ class LGSSMHelper(SGMCMCHelper):
         return forward_messages
 
     def _backward_messages(self, observations, parameters, backward_message,
-            tqdm=None):
+            weights=None, tqdm=None):
         # Return list of backward messages Pr(y_{>t} | x_t)
         # y is num_obs x n matrix
         num_obs = np.shape(observations)[0]
@@ -277,6 +277,7 @@ class LGSSMHelper(SGMCMCHelper):
             pbar.set_description("backward messages")
         for t in pbar:
             y_cur = observations[t]
+            weight_t = 1.0 if weights is None else weights[t]
 
             # Helper Values
             xi = Qinv + precision + CtRinvC
@@ -284,13 +285,14 @@ class LGSSMHelper(SGMCMCHelper):
             vi = mean_precision + np.dot(CtRinv, y_cur)
 
             # Calculate new parameters
-            log_constant = log_constant + \
-                    -0.5 * self.m * np.log(2.0*np.pi) + \
+            log_c = (-0.5 * self.m * np.log(2.0*np.pi) + \
                     np.sum(np.log(np.diag(LRinv))) + \
                     np.sum(np.log(np.diag(LQinv))) + \
                     -0.5 * np.linalg.slogdet(xi)[1] + \
                     -0.5 * np.dot(y_cur, np.dot(Rinv, y_cur)) + \
-                    0.5 * np.dot(vi, np.linalg.solve(xi, vi))
+                    0.5 * np.dot(vi, np.linalg.solve(xi, vi)))
+
+            log_constant += log_c * weight_t
 
             new_mean_precision = np.dot(L.T, vi)
             new_precision = AtQinvA - np.dot(AtQinv, L)
@@ -308,7 +310,8 @@ class LGSSMHelper(SGMCMCHelper):
         return backward_messages
 
     def marginal_loglikelihood(self, observations, parameters,
-            forward_message=None, backward_message=None, **kwargs):
+            forward_message=None, backward_message=None, weights=None,
+            **kwargs):
         # Run forward pass + combine with backward pass
         # y is num_obs x n matrix
         if forward_message is None:
@@ -321,15 +324,18 @@ class LGSSMHelper(SGMCMCHelper):
                 observations=observations,
                 parameters=parameters,
                 forward_message=forward_message,
+                weights=weights,
                 **kwargs)
 
         loglikelihood = _marginal_loglikelihood_helper(
-                forward_pass, backward_message,
+                forward_pass,
+                backward_message,
+                weight=1.0 if weights is None else weights[-1],
                 )
         return loglikelihood
 
     def complete_data_loglikelihood(self, observations, latent_vars, parameters,
-            forward_message=None, **kwargs):
+            forward_message=None, weights=None, **kwargs):
         if forward_message is None:
             forward_message = self.default_forward_message
 
@@ -341,20 +347,22 @@ class LGSSMHelper(SGMCMCHelper):
 
         x_prev = forward_message.get('x_prev')
         for t, (y_t, x_t) in enumerate(zip(observations, latent_vars)):
+            weight_t = 1.0 if weights is None else weights[t]
+
             # Pr(X_t | X_t-1)
             if (x_prev is not None):
                 diffLQinv = np.dot(x_t - np.dot(A,x_prev), LQinv)
-                log_constant = log_constant + \
-                        -0.5 * self.n * np.log(2*np.pi) + \
+                log_c = (-0.5 * self.n * np.log(2*np.pi) + \
                         -0.5 * np.dot(diffLQinv, diffLQinv) + \
-                        np.sum(np.log(np.diag(LQinv)))
+                        np.sum(np.log(np.diag(LQinv))))
+                log_constant += log_c * weight_t
 
             # Pr(Y_t | X_t)
             LRinvTymCx = np.dot(LRinv.T, y_t - np.dot(C, x_t))
-            log_constant = log_constant + \
-                    -0.5 * self.m * np.log(2*np.pi) + \
+            log_c = (-0.5 * self.m * np.log(2*np.pi) + \
                     -0.5*np.dot(LRinvTymCx, LRinvTymCx) + \
-                    np.sum(np.log(np.diag(LRinv)))
+                    np.sum(np.log(np.diag(LRinv))))
+            log_constant += log_c * weight_t
             x_prev = x_t
 
         return log_constant
@@ -736,7 +744,7 @@ class LGSSMHelper(SGMCMCHelper):
         return sufficient_stat
 
     def gradient_marginal_loglikelihood(self, observations, parameters,
-            forward_message=None, backward_message=None,
+            forward_message=None, backward_message=None, weights=None,
             include_init=True, tqdm=None):
         A, LQinv, C, LRinv = \
                 parameters.A, parameters.LQinv, parameters.C, parameters.LRinv
@@ -776,6 +784,8 @@ class LGSSMHelper(SGMCMCHelper):
             p_bar = tqdm(p_bar, total=np.shape(observations)[0])
             p_bar.set_description("gradient loglike")
         for t, (forward_t, backward_t, y_t) in enumerate(p_bar):
+            weight_t = 1.0 if weights is None else weights[t]
+
             # Pr(x_t | y)
             c_mean_precision = \
                     forward_t['mean_precision'] + backward_t['mean_precision']
@@ -786,14 +796,15 @@ class LGSSMHelper(SGMCMCHelper):
             xxt_mean = np.linalg.inv(c_precision) + np.outer(x_mean, x_mean)
 
             # Gradient of C
-            C_grad += np.outer(np.dot(Rinv, y_t), x_mean) + \
-                    -1.0 * np.dot(RinvC, xxt_mean)
+            C_grad += weight_t * (np.outer(np.dot(Rinv, y_t), x_mean) + \
+                    -1.0 * np.dot(RinvC, xxt_mean))
 
             # Gradient of LRinv
             Cxyt = np.outer(np.dot(C, x_mean), y_t)
             CxxtCt = np.dot(C, np.dot(xxt_mean, C.T))
-            LRinv_grad += LRinv_diaginv + \
+            LRinv_grad += weight_t * (LRinv_diaginv + \
                 -1.0*np.dot(np.outer(y_t, y_t) - Cxyt - Cxyt.T + CxxtCt, LRinv)
+                )
 
         # Transition Gradients
         if include_init:
@@ -803,6 +814,7 @@ class LGSSMHelper(SGMCMCHelper):
             pbar = zip(
                 forward_messages[1:-1], backward_messages[2:], observations[1:])
         for t, (forward_t, backward_t, y_t) in enumerate(pbar):
+            weight_t = 1.0 if weights is None else weights[t]
             # Pr(x_t, x_t+1 | y)
             c_mean_precision = \
                 np.concatenate([
@@ -825,19 +837,20 @@ class LGSSMHelper(SGMCMCHelper):
             xnxnt_mean = c_cov[self.n:, self.n:] + np.outer(xn_mean, xn_mean)
 
             # Gradient of A
-            A_grad += np.dot(Qinv, xnxpt_mean - np.dot(A,xpxpt_mean))
+            A_grad += weight_t * np.dot(Qinv, xnxpt_mean - np.dot(A,xpxpt_mean))
 
             # Gradient of LQinv
             Axpxnt = np.dot(A, xnxpt_mean.T)
             AxpxptAt = np.dot(A, np.dot(xpxpt_mean, A.T))
-            LQinv_grad += LQinv_diaginv + \
-                -1.0*np.dot(xnxnt_mean - Axpxnt - Axpxnt.T + AxpxptAt, LQinv)
+            LQinv_grad += weight_t * (LQinv_diaginv + \
+                -1.0*np.dot(xnxnt_mean - Axpxnt - Axpxnt.T + AxpxptAt, LQinv))
 
         grad = dict(A=A_grad, LQinv=LQinv_grad, C=C_grad, LRinv=LRinv_grad)
         return grad
 
     def gradient_complete_data_loglikelihood(self, observations, latent_vars,
-            parameters, forward_message=None, tqdm=None, **kwargs):
+            parameters, forward_message=None, weights=None, tqdm=None,
+            **kwargs):
         if forward_message is None:
             forward_message = self.default_forward_message
         A = parameters.A
@@ -858,20 +871,21 @@ class LGSSMHelper(SGMCMCHelper):
             # Transition Gradients
             x_prev = forward_message.get('x_prev')
             for t, x_t in enumerate(latent_vars):
+                weight_t = 1.0 if weights is None else weights[t]
                 if x_prev is not None:
                     diff = x_t - np.dot(A, x_prev)
-                    grad['A'] += np.outer(
-                        np.dot(Qinv, diff), x_prev)
-                    grad['LQinv'] += LQinv_Tinv + \
-                        -1.0*np.dot(np.outer(diff, diff), LQinv)
+                    grad['A'] += weight_t * np.outer(np.dot(Qinv, diff), x_prev)
+                    grad['LQinv'] += weight_t * (LQinv_Tinv + \
+                        -1.0*np.dot(np.outer(diff, diff), LQinv))
                 x_prev = x_t
 
             # Emission Gradients
             for t, (x_t, y_t) in enumerate(zip(latent_vars, observations)):
+                weight_t = 1.0 if weights is None else weights[t]
                 diff = y_t - np.dot(C, x_t)
-                grad['C'] += np.outer(np.dot(Rinv, diff), x_t)
-                grad['LRinv'] += LRinv_Tinv + \
-                    -1.0*np.dot(np.outer(diff, diff), LRinv)
+                grad['C'] += weight_t * np.outer(np.dot(Rinv, diff), x_t)
+                grad['LRinv'] += weight_t * (LRinv_Tinv + \
+                    -1.0*np.dot(np.outer(diff, diff), LRinv))
         elif len(np.shape(latent_vars)) == 3:
             # Average over Multiple Latent Vars
             num_samples = np.shape(latent_vars)[2]
@@ -879,22 +893,25 @@ class LGSSMHelper(SGMCMCHelper):
             # Transition Gradients
             x_prev = forward_message.get('x_prev')
             for t, x_t in enumerate(latent_vars):
+                weight_t = 1.0 if weights is None else weights[t]
                 if x_prev is not None:
                     diff = x_t - np.dot(A, x_prev)
-                    grad['A'] += np.dot(Qinv,
+                    grad['A'] += weight_t * np.dot(Qinv,
                             np.dot(diff, x_prev.T))/num_samples
-                    grad['LQinv'] += LQinv_Tinv + \
-                        -1.0*np.dot(np.dot(diff, diff.T), LQinv)/num_samples
+                    grad['LQinv'] += weight_t * (LQinv_Tinv + \
+                        -1.0*np.dot(np.dot(diff, diff.T), LQinv)/num_samples)
                 x_prev = x_t
 
             # Emission Gradients
             for t, (x_t, y_t_) in enumerate(zip(latent_vars, observations)):
                 y_t = np.array([y_t_ for _ in range(num_samples)]).T
+                weight_t = 1.0 if weights is None else weights[t]
 
                 diff = y_t - np.dot(C, x_t)
-                grad['C'] += np.dot(Rinv, np.dot(diff, x_t.T))/num_samples
-                grad['LRinv'] += LRinv_Tinv + \
-                    -1.0*np.dot(np.dot(diff, diff.T), LRinv)/num_samples
+                grad['C'] += weight_t * (np.dot(Rinv,
+                    np.dot(diff, x_t.T))/num_samples)
+                grad['LRinv'] += weight_t * (LRinv_Tinv + \
+                    -1.0*np.dot(np.dot(diff, diff.T), LRinv)/num_samples)
         else:
             raise ValueError("Incorrect latent_var shape")
 
@@ -909,7 +926,7 @@ class LGSSMHelper(SGMCMCHelper):
             raise ValueError("Unrecognized `kind' {0}".format(kind))
 
     def pf_score_estimate(self, observations, parameters,
-            subsequence_start=0, subsequence_end=None,
+            subsequence_start=0, subsequence_end=None, weights=None,
             pf="poyiadjis_N", N=100, kernel=None,
             **kwargs):
         """ Particle Filter Score Estimate
@@ -921,6 +938,7 @@ class LGSSMHelper(SGMCMCHelper):
                 (0:subsequence_start are left buffer)
             subsequence_end (int): relative end of subsequence
                 (subsequence_end: is right buffer)
+            weights (ndarray): weights for [subsequence_start, subsequence_end)
             pf (string): particle filter name
                 "nemeth" - use Nemeth et al. O(N)
                 "poyiadjis_N" - use Poyiadjis et al. O(N)
@@ -955,6 +973,7 @@ class LGSSMHelper(SGMCMCHelper):
                 statistic_dim=complete_grad_dim,
                 t1=subsequence_start,
                 tL=subsequence_end,
+                weights=weights,
                 prior_mean=prior_mean,
                 prior_var=prior_var,
                 **kwargs
@@ -1001,11 +1020,11 @@ class LGSSMHelper(SGMCMCHelper):
         elif kernel == "highdim":
             Kernel = LGSSMHighDimOptimalKernel()
         else:
-            raise ValueError("Unrecoginized kernel = {0}".format(kernel))
+            raise ValueError("Unrecognized kernel = {0}".format(kernel))
         return Kernel
 
     def pf_loglikelihood_estimate(self, observations, parameters,
-            subsequence_start=0, subsequence_end=None,
+            subsequence_start=0, subsequence_end=None, weights=None,
             pf="poyiadjis_N", N=100, kernel=None,
             **kwargs):
         """ Particle Filter Marginal Log-Likelihood Estimate
@@ -1017,6 +1036,7 @@ class LGSSMHelper(SGMCMCHelper):
                 (0:subsequence_start are left buffer)
             subsequence_end (int): relative end of subsequence
                 (subsequence_end: is right buffer)
+            weights (ndarray): weights for [subsequence_start, subsequence_end)
             pf (string): particle filter name
                 "nemeth" - use Nemeth et al. O(N)
                 "poyiadjis_N" - use Poyiadjis et al. O(N)
@@ -1050,6 +1070,7 @@ class LGSSMHelper(SGMCMCHelper):
                 statistic_dim=self.n+2*self.n**2,
                 t1=subsequence_start,
                 tL=subsequence_end,
+                weights=weights,
                 prior_mean=prior_mean,
                 prior_var=prior_var,
                 **kwargs
@@ -1117,7 +1138,7 @@ class LGSSMHelper(SGMCMCHelper):
         return predictive_loglikelihood
 
     def pf_latent_var_marginal(self, observations, parameters,
-            subsequence_start=0, subsequence_end=None,
+            subsequence_start=0, subsequence_end=None, weights=None,
             pf="poyiadjis_N", N=100, kernel=None,
             **kwargs):
         # Set kernel
@@ -1138,6 +1159,7 @@ class LGSSMHelper(SGMCMCHelper):
                 statistic_dim=self.n+2*self.n**2,
                 t1=subsequence_start,
                 tL=subsequence_end,
+                weights=weights,
                 prior_mean=prior_mean,
                 prior_var=prior_var,
                 elementwise_statistic=True,
@@ -1161,7 +1183,8 @@ class LGSSMHelper(SGMCMCHelper):
 
         return x_mean, x_cov
 
-def _marginal_loglikelihood_helper(forward_message, backward_message):
+def _marginal_loglikelihood_helper(forward_message, backward_message,
+        weight=1.0):
     # Calculate the marginal loglikelihood of forward + backward message
     f_mean_precision = forward_message['mean_precision']
     f_precision = forward_message['precision']
@@ -1169,7 +1192,7 @@ def _marginal_loglikelihood_helper(forward_message, backward_message):
     c_precision = f_precision + backward_message['precision']
 
     log_constant = forward_message['log_constant'] + \
-            backward_message['log_constant'] + \
+            (backward_message['log_constant'] + \
             +0.5 * np.linalg.slogdet(f_precision)[1] + \
             -0.5 * np.linalg.slogdet(c_precision)[1] + \
             -0.5 * np.dot(f_mean_precision,
@@ -1178,6 +1201,7 @@ def _marginal_loglikelihood_helper(forward_message, backward_message):
             0.5 * np.dot(c_mean_precision,
                 np.linalg.solve(c_precision, c_mean_precision)
                 )
+            ) * weight
     return log_constant
 
 def lgssm_complete_data_loglike_gradient(x_t, x_next, y_next, parameters,

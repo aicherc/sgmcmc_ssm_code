@@ -6,10 +6,9 @@ from ..base_parameter import (
         BaseParameters, BasePrior, BasePreconditioner,
         )
 from ..variable_mixins import (
-        RSingleMixin, RSinglePrior,
-        )
-from ..variable_mixins.garch_variable import (
-        GARCHMixin, GARCHMixinPrior,
+        ASingleMixin, ASinglePrior, ASinglePreconditioner,
+        QSingleMixin, QSinglePrior, QSinglePreconditioner,
+        RSingleMixin, RSinglePrior, RSinglePreconditioner,
         )
 from ..sgmcmc_sampler import (
         SGMCMCSampler,
@@ -21,66 +20,91 @@ from .._utils import (
         lower_tri_mat_inv,
         )
 from ..particle_filters.kernels import (
-        GARCHPriorKernel, GARCHOptimalKernel,
+        SVMPriorKernel,
         )
 from ..particle_filters.buffered_smoother import (
         buffered_pf_wrapper,
         average_statistic,
         )
-class GARCHParameters(RSingleMixin, GARCHMixin,
+from sgmcmc_ssm.particle_filters.pf import (
+        gaussian_sufficient_statistics,
+        )
+
+
+class SVMParameters(RSingleMixin, QSingleMixin, ASingleMixin,
         BaseParameters):
-    """ GARCH Parameters """
+    """ SVM Parameters """
     def __str__(self):
-        my_str = "GARCHParameters:"
-        my_str += "\nalpha:\n" + str(self.alpha)
-        my_str += "\nbeta:\n" + str(self.beta)
-        my_str += "\ngamma:\n" + str(self.gamma)
-        my_str += "\ntau:\n" + str(self.tau)
+        my_str = "SVMParameters:"
+        my_str += "\nA:\n" + str(self.A)
+        my_str += "\nQ:\n" + str(self.Q)
+        my_str += "\nR:\n" + str(self.R)
         return my_str
+
+
+    @property
+    def phi(self):
+        phi = self.var_dict['A']
+        return phi
+
+    @property
+    def sigma(self):
+        if self.n == 1:
+            sigma = self.var_dict['LQinv'] ** -1
+        else:
+            sigma = np.linalg.inv(self.var_dict['LQinv'].T)
+        return sigma
 
     @property
     def tau(self):
-        tau = self.var_dict['LRinv'] ** -1
+        if self.m == 1:
+            tau = self.var_dict['LRinv'] ** -1
+        else:
+            tau = np.linalg.inv(self.var_dict['LRinv'].T)
         return tau
 
-    @property
-    def n(self):
-        return 1
 
-class GARCHPrior(RSinglePrior, GARCHMixinPrior,
+class SVMPrior(RSinglePrior, QSinglePrior, ASinglePrior,
         BasePrior):
-    """ GARCH Prior
+    """ SVM Prior
     See individual Prior Mixins for details
     """
     @staticmethod
     def _parameters(**kwargs):
-        return GARCHParameters(**kwargs)
+        return SVMParameters(**kwargs)
 
-def generate_garch_data(T, parameters, initial_message = None,
+#class SVMPreconditioner(RSinglePreconditioner, QSinglePreconditioner,
+#        ASinglePreconditioner, BasePreconditioner):
+#    """ Preconditioner for SVM
+#    See individual Preconditioner Mixin for details
+#    """
+#    pass
+
+def generate_svm_data(T, parameters, initial_message = None,
         tqdm=None):
-    """ Helper function for generating GARCH time series
+    """ Helper function for generating SVM time series
 
     Args:
         T (int): length of series
-        parameters (GARCHParameters): parameters
+        parameters (SVMParameters): parameters
         initial_message (ndarray): prior for u_{-1}
 
     Returns:
         data (dict): dictionary containing:
             observations (ndarray): T by m
             latent_vars (ndarray): T by n
-            parameters (GARCHParameters)
+            parameters (SVMParameters)
             init_message (ndarray)
     """
-    n = 1
-    m = 1
-    alpha = parameters.alpha
-    beta = parameters.beta
-    gamma = parameters.gamma
+    n, _ = np.shape(parameters.A)
+    m, _ = np.shape(parameters.R)
+    A = parameters.A
+    Q = parameters.Q
     R = parameters.R
 
     if initial_message is None:
-        init_precision =  np.array([[(1 - beta - gamma)/alpha]])
+        init_precision = var_stationary_precision(
+                parameters.Qinv, parameters.A, 10)
         initial_message = {
                 'log_constant': 0.0,
                 'mean_precision': np.zeros(n),
@@ -88,7 +112,6 @@ def generate_garch_data(T, parameters, initial_message = None,
                 }
 
     latent_vars = np.zeros((T, n), dtype=float)
-    sigma2s = np.zeros((T), dtype=float)
     obs_vars = np.zeros((T, m), dtype=float)
     latent_prev = np.random.multivariate_normal(
             mean=np.linalg.solve(initial_message['precision'],
@@ -100,30 +123,26 @@ def generate_garch_data(T, parameters, initial_message = None,
     if tqdm is not None:
         pbar = tqdm(pbar)
         pbar.set_description("generating data")
-    sigma2_prev = 0
     for t in pbar:
-        sigma2s[t] = alpha + beta*latent_prev**2 + gamma*sigma2_prev
         latent_vars[t] = np.random.multivariate_normal(
-                mean=np.zeros(1),
-                cov=np.array([[sigma2s[t]]]),
+                mean=np.dot(A, latent_prev),
+                cov=Q,
                 )
         obs_vars[t] = np.random.multivariate_normal(
-                mean=latent_vars[t],
-                cov=R,
+                mean=np.zeros(1),
+                cov=np.exp(latent_vars[t])*R,
                 )
         latent_prev = latent_vars[t]
-        sigma2_prev = sigma2s[t]
 
     data = dict(
             observations=obs_vars,
             latent_vars=latent_vars,
-            sigma2s=sigma2s,
             parameters=parameters,
             initial_message=initial_message,
             )
     return data
 
-def garch_complete_data_loglike_gradient(x_t, x_next, y_next, parameters, **kwargs):
+def svm_complete_data_loglike_gradient(x_t, x_next, y_next, parameters, **kwargs):
     """ Gradient of Complete Data Log-Likelihood
 
     Gradient w/r.t. parameters of log Pr(y_{t+1}, x_{t+1} | x_t, parameters)
@@ -138,88 +157,93 @@ def garch_complete_data_loglike_gradient(x_t, x_next, y_next, parameters, **kwar
             gradient of complete data loglikelihood for particles
             [ grad_LRinv, grad_LQinv, grad_A ]
     """
-    N, _ = np.shape(x_next)
-    mu = parameters.mu
-    phi = parameters.phi
-    lambduh = parameters.lambduh
+    N, n = np.shape(x_next)
+    m = np.shape(y_next)[0]
+
+    A = parameters.A
+    LQinv = parameters.LQinv
+    Qinv = parameters.Qinv
     LRinv = parameters.LRinv
     Rinv = parameters.Rinv
 
-    v = x_next[:,1]
-    grad_v = -0.5*(v-x_next[:,0]**2)/(v**2)
-    grad_log_mu = grad_v * (1-phi) * mu
-    grad_logit_phi = (grad_v * \
-            (-mu + lambduh*x_t[:,0]**2 + (1-lambduh)*x_t[:,1]) * (1-phi)*phi
-            )
-    grad_logit_lambduh = (grad_v * \
-            phi*(x_t[:,0]**2 - x_t[:,1]) * (1-lambduh)*lambduh
-            )
-    diff_y = y_next - x_next[:,0]
-    grad_LRinv = (LRinv**-1) - (diff_y**2) * LRinv
+    grad_complete_data_loglike = [None] * N
+    if (n != 1) or (m != 1):
+        LQinv_Tinv = np.linalg.inv(LQinv).T
+        LRinv_Tinv = np.linalg.inv(LRinv).T
+        for i in range(N):
+            grad = {}
+            diff = x_next[i] - np.dot(A, x_t[i])
+            grad['A'] = np.outer(
+                np.dot(Qinv, diff), x_t[i])
+            grad['LQinv'] = LQinv_Tinv + -1.0*np.dot(np.outer(diff, diff), LQinv)
 
-    grad_complete_data_loglike = np.array([
-        grad_LRinv[0], grad_log_mu, grad_logit_phi, grad_logit_lambduh]).T
+            diff2 = y_next**2 /np.exp(x_next[i])
+            grad['LRinv'] = LRinv_Tinv + -1.0*np.dot(diff2, LRinv)
+
+            grad_complete_data_loglike[i] = np.concatenate([
+                grad['LRinv'].flatten(),
+                grad['LQinv'].flatten(),
+                grad['A'].flatten(),
+                ])
+        grad_complete_data_loglike = np.array(grad_complete_data_loglike)
+    else:
+        diff_x = x_next - A * x_t
+        grad_A = Qinv * diff_x * x_t
+        grad_LQinv = (LQinv**-1) - (diff_x**2) * LQinv
+        diff_y2 = y_next**2/np.exp(x_next)
+        grad_LRinv = (LRinv**-1) - (diff_y2) * LRinv
+        grad_complete_data_loglike = np.hstack([
+            grad_LRinv, grad_LQinv, grad_A])
 
     return grad_complete_data_loglike
 
-def garch_predictive_loglikelihood(x_t, x_next, t, num_steps_ahead,
-        parameters, observations, prior_kernel,
+def svm_predictive_loglikelihood(x_t, x_next, t, num_steps_ahead,
+        parameters, observations, Ntilde=1,
         **kwargs):
     """ Predictive Log-Likelihood
 
     Calculate [Pr(y_{t+1+k} | x_{t+1} for k in [0,..., num_steps_ahead]]
-    Uses MC so is very noisy for large k
 
 
     Args:
         x_t (N by n ndarray): particles for x_t
         x_next (N by n ndarray): particles for x_{t+1}
-        num_steps_ahead (int):
+        num_steps_ahead
         parameters (Parameters): parameters
         observations (T by m ndarray): y
+        Ntilde (int): number of MC samples
     Returns:
         predictive_loglikelihood (N by num_steps_ahead+1 ndarray)
 
     """
-    N = np.shape(x_next)[0]
-    T = np.shape(observations)[0]
+    N, n = np.shape(x_next)
+    T, m = np.shape(observations)
 
     predictive_loglikelihood = np.zeros((N, num_steps_ahead+1))
 
-    x_pred = x_next + 0
-    R = parameters.R
+    x_pred_mean = x_next + 0.0
+    x_pred_cov = 0.0
+    R, Q = parameters.R, parameters.Q
     for k in range(num_steps_ahead+1):
         if t+k >= T:
             break
-        diff = np.ones(N)*observations[t+k] - x_pred[:,0]
-        y_pred_cov = R
-        pred_loglike = -0.5*diff**2/y_pred_cov + \
-                -0.5*np.log(2.0*np.pi) - 0.5*np.log(y_pred_cov)
+        diff = observations[t+k]
+        x_mc = (np.outer(x_pred_mean, np.ones(Ntilde)) + \
+                np.sqrt(x_pred_cov)*np.random.normal(size=(N,Ntilde)))
+        y_pred_cov = R*np.exp(x_mc)
+        pred_loglike = np.mean(
+                -0.5*diff**2/y_pred_cov + \
+                -0.5*np.log(2.0*np.pi) - 0.5*np.log(y_pred_cov),
+                axis = 1)
         predictive_loglikelihood[:,k] = pred_loglike
-        x_pred = prior_kernel.rv(x_pred)
+
+        x_pred_mean = parameters.A * x_pred_mean
+        x_pred_cov = Q + parameters.A**2 * x_pred_cov
 
     return predictive_loglikelihood
 
-def garch_sufficient_statistics(x_t, x_next, y_next, **kwargs):
-    """ GARCH Sufficient Statistics
-
-    h[0] = sum(x_{t+1})
-    h[1] = sum(x_{t+1} x_{t+1}^T)
-    h[2] = sum(x_t x_{t+1})
-
-    Args:
-        x_t (N by n ndarray): particles for x_t
-        x_next (N by n ndarray): particles for x_{t+1}
-        y_next (m ndarray): y_{t+1}
-    Returns:
-        h (N by p ndarray): sufficient statistic
-    """
-    N = np.shape(x_t)[0]
-    h = np.array([x_next[:,0], x_next[:,0]**2, x_t[:,0]*x_next[:,0]]).T
-    return h
-
-class GARCHHelper(SGMCMCHelper):
-    """ GARCH Helper
+class SVMHelper(SGMCMCHelper):
+    """ SVM Helper
 
         forward_message (dict) with keys
             log_constant (double) log scaling const
@@ -231,7 +255,7 @@ class GARCHHelper(SGMCMCHelper):
             mean_precision (ndarray) mean precision
             precision (ndarray) precision
     """
-    def __init__(self, n=1, m=1, forward_message=None, backward_message=None,
+    def __init__(self, n, m, forward_message=None, backward_message=None,
             **kwargs):
         self.n = n
         self.m = m
@@ -254,12 +278,12 @@ class GARCHHelper(SGMCMCHelper):
         return
 
     def _forward_messages(self, observations, parameters, forward_message,
-            tqdm=None):
-        raise NotImplementedError('GARCH does not have analytic message passing')
+            weights=None, tqdm=None):
+        raise NotImplementedError('SVM does not have analytic message passing')
 
     def _backward_messages(self, observations, parameters, backward_message,
-            tqdm=None):
-        raise NotImplementedError('GARCH does not have analytic message passing')
+            weights=None, tqdm=None):
+        raise NotImplementedError('SVM does not have analytic message passing')
 
     def latent_var_sample(self, observations, parameters,
             forward_message=None, backward_message=None,
@@ -271,7 +295,7 @@ class GARCHHelper(SGMCMCHelper):
 
         Args:
             observations (ndarray): num_obs by n observations
-            parameters (GARCHParameters): parameters
+            parameters (SVMParameters): parameters
             forward_message (dict): alpha message
                 (e.g. Pr(x_{-1} | y_{-inf:-1}))
             distr (string): 'smoothed', 'filtered', 'predict'
@@ -298,7 +322,7 @@ class GARCHHelper(SGMCMCHelper):
         raise NotImplementedError()
 
     def gradient_complete_data_loglikelihood(self, observations, latent_vars,
-            parameters, forward_message=None, tqdm=None, **kwargs):
+            parameters, forward_message=None, weights=None, tqdm=None, **kwargs):
         raise NotImplementedError()
 
     def gradient_loglikelihood(self, kind='marginal', **kwargs):
@@ -311,17 +335,17 @@ class GARCHHelper(SGMCMCHelper):
 
     def _get_kernel(self, kernel):
         if kernel is None:
-            kernel = "optimal"
+            kernel = "prior"
         if kernel == "prior":
-            Kernel = GARCHPriorKernel()
+            Kernel = SVMPriorKernel()
         elif kernel == "optimal":
-            Kernel = GARCHOptimalKernel()
+            raise NotImplementedError("SVM optimal kernel not analytic")
         else:
             raise ValueError("Unrecoginized kernel = {0}".format(kernel))
         return Kernel
 
     def pf_score_estimate(self, observations, parameters,
-            subsequence_start=0, subsequence_end=None,
+            subsequence_start=0, subsequence_end=None, weights=None,
             pf="poyiadjis_N", N=100, kernel=None,
             **kwargs):
         """ Particle Filter Score Estimate
@@ -333,6 +357,7 @@ class GARCHHelper(SGMCMCHelper):
                 (0:subsequence_start are left buffer)
             subsequence_end (int): relative end of subsequence
                 (subsequence_end: is right buffer)
+            weights (ndarray): weights for [subsequence_start, subsequence_end)
             pf (string): particle filter name
                 "nemeth" - use Nemeth et al. O(N)
                 "poyiadjis_N" - use Poyiadjis et al. O(N)
@@ -352,7 +377,9 @@ class GARCHHelper(SGMCMCHelper):
         Kernel = self._get_kernel(kernel)
 
         # Prior Mean + Variance
-        prior_mean, prior_var = self._get_prior_x(parameters)
+        prior_var = self.default_forward_message['precision'][0,0]**-1
+        prior_mean = \
+                self.default_forward_message['mean_precision'][0] * prior_var
 
         # Run buffered pf
         out = buffered_pf_wrapper(pf=pf,
@@ -360,10 +387,11 @@ class GARCHHelper(SGMCMCHelper):
                 parameters=parameters,
                 N=N,
                 kernel=Kernel,
-                additive_statistic_func=garch_complete_data_loglike_gradient,
-                statistic_dim=4,
+                additive_statistic_func=svm_complete_data_loglike_gradient,
+                statistic_dim=3,
                 t1=subsequence_start,
                 tL=subsequence_end,
+                weights=weights,
                 prior_mean=prior_mean,
                 prior_var=prior_var,
                 **kwargs
@@ -371,15 +399,14 @@ class GARCHHelper(SGMCMCHelper):
         score_estimate = average_statistic(out)
         grad = dict(
             LRinv = score_estimate[0],
-            log_mu = score_estimate[1],
-            logit_phi = score_estimate[2],
-            logit_lambduh = score_estimate[3],
+            LQinv = score_estimate[1],
+            A = score_estimate[2],
             )
 
         return grad
 
     def pf_loglikelihood_estimate(self, observations, parameters,
-            subsequence_start=0, subsequence_end=None,
+            subsequence_start=0, subsequence_end=None, weights=None,
             pf="poyiadjis_N", N=1000, kernel=None,
             **kwargs):
         """ Particle Filter Marginal Log-Likelihood Estimate
@@ -391,6 +418,7 @@ class GARCHHelper(SGMCMCHelper):
                 (0:subsequence_start are left buffer)
             subsequence_end (int): relative end of subsequence
                 (subsequence_end: is right buffer)
+            weights (ndarray): weights for [subsequence_start, subsequence_end)
             pf (string): particle filter name
                 "nemeth" - use Nemeth et al. O(N)
                 "poyiadjis_N" - use Poyiadjis et al. O(N)
@@ -410,7 +438,9 @@ class GARCHHelper(SGMCMCHelper):
         Kernel = self._get_kernel(kernel)
 
         # Prior Mean + Variance
-        prior_mean, prior_var = self._get_prior_x(parameters)
+        prior_var = self.default_forward_message['precision'][0,0]**-1
+        prior_mean = \
+                self.default_forward_message['mean_precision'][0] * prior_var
 
         # Run buffered pf
         out = buffered_pf_wrapper(pf=pf,
@@ -418,10 +448,11 @@ class GARCHHelper(SGMCMCHelper):
                 parameters=parameters,
                 N=N,
                 kernel=Kernel,
-                additive_statistic_func=garch_sufficient_statistics,
+                additive_statistic_func=gaussian_sufficient_statistics,
                 statistic_dim=3,
                 t1=subsequence_start,
                 tL=subsequence_end,
+                weights=weights,
                 prior_mean=prior_mean,
                 prior_var=prior_var,
                 **kwargs
@@ -451,7 +482,7 @@ class GARCHHelper(SGMCMCHelper):
             **kwargs - additional keyword args for individual filters
 
         Return:
-            loglikelihood (double): marignal log likelihood estimate
+            predictive_loglikelihood (num_steps_ahead + 1 ndarray)
 
         """
         if pf != "pf_filter":
@@ -460,15 +491,14 @@ class GARCHHelper(SGMCMCHelper):
         Kernel = self._get_kernel(kernel)
 
         # Prior Mean + Variance
-        prior_mean, prior_var = self._get_prior_x(parameters)
+        prior_var = self.default_forward_message['precision'][0,0]**-1
+        prior_mean = \
+                self.default_forward_message['mean_precision'][0] * prior_var
 
         from functools import partial
-        prior_kernel = self._get_kernel("prior")
-        prior_kernel.set_parameters(parameters=parameters)
-        additive_statistic_func = partial(garch_predictive_loglikelihood,
+        additive_statistic_func = partial(svm_predictive_loglikelihood,
                 num_steps_ahead=num_steps_ahead,
                 observations=observations,
-                prior_kernel=prior_kernel,
                 )
 
         # Run buffered pf
@@ -490,14 +520,16 @@ class GARCHHelper(SGMCMCHelper):
         return predictive_loglikelihood
 
     def pf_latent_var_marginal(self, observations, parameters,
-            subsequence_start=0, subsequence_end=None,
+            subsequence_start=0, subsequence_end=None, weights=None,
             pf="poyiadjis_N", N=100, kernel=None,
             **kwargs):
         # Set kernel
         Kernel = self._get_kernel(kernel)
 
         # Prior Mean + Variance
-        prior_mean, prior_var = self._get_prior_x(parameters)
+        prior_var = self.default_forward_message['precision'][0,0]**-1
+        prior_mean = \
+                self.default_forward_message['mean_precision'][0] * prior_var
 
         # Run buffered pf
         out = buffered_pf_wrapper(pf=pf,
@@ -505,10 +537,11 @@ class GARCHHelper(SGMCMCHelper):
                 parameters=parameters,
                 N=N,
                 kernel=Kernel,
-                additive_statistic_func=garch_sufficient_statistics,
+                additive_statistic_func=gaussian_sufficient_statistics,
                 statistic_dim=3,
                 t1=subsequence_start,
                 tL=subsequence_end,
+                weights=weights,
                 prior_mean=prior_mean,
                 prior_var=prior_var,
                 elementwise_statistic=True,
@@ -524,19 +557,14 @@ class GARCHHelper(SGMCMCHelper):
 
         return x_mean, x_cov
 
-    def _get_prior_x(self, parameters):
-        prior_mean = 0
-        prior_var = parameters.alpha/(1-parameters.beta-parameters.gamma)
-        return prior_mean, prior_var
-
-class GARCHSampler(SGMCMCSampler):
-    def __init__(self, n=1, m=1, name="GARCHSampler", **kwargs):
+class SVMSampler(SGMCMCSampler):
+    def __init__(self, n, m, name="SVMSampler", **kwargs):
         self.options = kwargs
         self.n = n
         self.m = m
         self.name = name
 
-        Helper = kwargs.get('Helper', GARCHHelper)
+        Helper = kwargs.get('Helper', SVMHelper)
         self.message_helper=Helper(
                 n=self.n,
                 m=self.m,
@@ -548,9 +576,9 @@ class GARCHSampler(SGMCMCSampler):
 
         Args:
             observations (ndarray): T by m ndarray of time series values
-            prior (GARCHPrior): prior
+            prior (SVMPrior): prior
             forward_message (ndarray): prior probability for latent state
-            parameters (GARCHParameters): initial parameters
+            parameters (SVMParameters): initial parameters
                 (optional, will sample from prior by default)
 
         """
@@ -566,8 +594,8 @@ class GARCHSampler(SGMCMCSampler):
         if parameters is None:
             self.parameters = self.prior.sample_prior()
         else:
-            if not isinstance(parameters, GARCHParameters):
-                raise ValueError("parameters is not a GARCHParameter")
+            if not isinstance(parameters, SVMParameters):
+                raise ValueError("parameters is not a SVMParameter")
             self.parameters = parameters
 
 
@@ -595,10 +623,10 @@ class GARCHSampler(SGMCMCSampler):
         """ One Step of Blocked Gibbs Sampler
 
         Returns:
-            parameters (GARCHParameters): sampled parameters after one step
+            parameters (SVMParameters): sampled parameters after one step
         """
         raise NotImplementedError()
 
 
-class SeqGARCHSampler(SeqSGMCMCSampler, GARCHSampler):
+class SeqSVMSampler(SeqSGMCMCSampler, SVMSampler):
     pass

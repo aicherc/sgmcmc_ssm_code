@@ -3,7 +3,7 @@ Kernels for particle filters
 
 """
 import numpy as np
-from scipy.special import expit
+from scipy.special import expit, logsumexp
 
 # Kernel
 class Kernel(object):
@@ -69,7 +69,14 @@ class Kernel(object):
         raise NotImplementedError()
 
     def get_prior_log_density_max(self):
+        """ Upper bound for prior log density """
         raise NotImplementedError()
+
+    def ancestor_log_weights(self, particles, log_weights):
+        """ Weights for ancestor sampling
+        Default is log_weights
+        """
+        return log_weights
 
 # LatentGaussianKernel
 class LatentGaussianKernel(Kernel):
@@ -326,7 +333,7 @@ class LGSSMHighDimOptimalKernel(LatentGaussianKernel):
 # SVM Kernels:
 class SVMPriorKernel(LatentGaussianKernel):
     def rv(self, x_t, **kwargs):
-        """ Prior Kernel for LGSSM
+        """ Prior Kernel for SVM
 
         Sample x_{t+1} ~ Pr(x_{t+1} | x_t, parameters)
 
@@ -350,7 +357,7 @@ class SVMPriorKernel(LatentGaussianKernel):
             return x_next
 
     def reweight(self, x_t, x_next, **kwargs):
-        """ Reweight function for Prior Kernel for LGSSM
+        """ Reweight function for Prior Kernel for SVM
 
         weight_t = Pr(y_{t+1} | x_{t+1}, parameters)
 
@@ -374,6 +381,374 @@ class SVMPriorKernel(LatentGaussianKernel):
                     np.log(self.parameters.LRinv) + \
                     -0.5*x_next
         log_weights = np.reshape(log_weights, (N))
+        return log_weights
+
+# SVJM Kernels:
+class SVJMPriorKernel(Kernel):
+    def rv(self, x_t, **kwargs):
+        """ Prior Kernel for SVJM
+
+        Sample x_{t+1} ~ Pr(x_{t+1} | x_t, parameters)
+
+        Args:
+            x_t (ndarray): N by n, x_t
+        Return:
+            x_next (ndarray): N by n, x_{t+1}
+
+        """
+        if (len(np.shape(x_t)) > 1) and (np.shape(x_t)[1] > 1):
+            # x is vector
+            x_next_mean = x_t.dot(self.parameters.phi.T)
+            x_next = np.linalg.solve(self.parameters.Lsigma2inv.T,
+                    np.random.normal(size=x_t.shape).T).T + x_next_mean
+            J_next = np.random.rand(np.shape(x_t)[0]) < self.parameters.pJ
+            x_next += J_next[:, np.newaxis] * np.linalg.solve(
+                    self.parameters.LsigmaJ2inv.T,
+                    np.random.normal(size=x_t.shape).T).T
+            return x_next
+        else:
+            # n = 1, x is scalar
+            x_next_mean = x_t * self.parameters.phi
+            x_next = self.parameters.Lsigma2inv**-1 * np.random.normal(
+                    size=x_t.shape) + x_next_mean
+            J_next = np.random.rand(np.shape(x_t)[0]) < self.parameters.pJ
+            x_next += (np.random.normal(size=x_t.shape) *
+                    J_next[:, np.newaxis]*self.parameters.LsigmaJ2inv[0,0]**-1)
+            return x_next
+
+    def reweight(self, x_t, x_next, **kwargs):
+        """ Reweight function for Prior Kernel for SVJM
+
+        weight_t = Pr(y_{t+1} | x_{t+1}, parameters)
+
+        Args:
+            x_t (ndarray): N by n, x_t
+            x_next (ndarray): N by n, x_{t+1}
+        Return:
+            log_weights (ndarray): N, importance weights
+
+        """
+        N = np.shape(x_next)[0]
+        if (len(np.shape(x_t)) > 1) and (np.shape(x_t)[1] > 1):
+            # n > 1
+            raise NotImplementedError()
+        else:
+            # n = 1, x is scalar
+            log_weights = \
+                    -0.5*np.log(2.0*np.pi) + \
+                    -0.5*np.exp(
+                        2.0*np.log(np.abs(self.y_next)) -
+                        x_next + np.log(self.parameters.tau2inv)
+                        ) + \
+                    np.log(self.parameters.Ltau2inv) + \
+                    -0.5*x_next
+        log_weights = np.reshape(log_weights, (N))
+        return log_weights
+
+    def sample_x0(self, prior_mean, prior_var, N, n):
+        """ Initialize x_t
+
+        Returns:
+            x_t (N by n ndarray)
+        """
+        x_t = np.random.normal(
+                loc=prior_mean,
+                scale=np.sqrt(prior_var),
+                size=(N, n))
+        return x_t
+
+    def prior_log_density(self, x_t, x_next, **kwargs):
+        """ log density of prior kernel
+
+        Args:
+            x_t (N by n ndarray): x_t
+            x_next (N by n ndarray): x_{t+1}
+
+        Returns:
+            loglikelihoods (N ndarray): q(x_next | x_t, parameters)
+                (ignores constants with respect to x_t & x_next
+        """
+        N = np.shape(x_t)[0]
+        if (len(np.shape(x_t)) > 1) and (np.shape(x_t)[1] > 1):
+            # x is vector
+            raise NotImplementedError()
+        else:
+            # n = 1, x is scalar
+            diff = x_next - self.parameters.phi*x_t
+            sigma2_nojump = self.parameters.sigma2
+            sigma2_jump = self.parameters.sigma2 + self.parameters.sigmaJ2
+            pJ = self.parameters.pJ
+
+            loglikelihoods_nojump = -0.5*(diff**2)/sigma2_nojump+\
+                    -0.5*np.log(2.0*np.pi) - 0.5*np.log(sigma2_nojump)
+            loglikelihoods_jump = -0.5*(diff**2)/sigma2_jump+\
+                    -0.5*np.log(2.0*np.pi) - 0.5*np.log(sigma2_jump)
+            loglikelihoods_max = np.max(np.array([
+                loglikelihoods_jump, loglikelihoods_nojump]),
+                axis=0)
+            loglikelihoods = np.log(
+                    pJ*np.exp(loglikelihoods_jump-loglikelihoods_max) +
+                    (1-pJ)*np.exp(loglikelihoods_nojump-loglikelihoods_max)
+                    ) + loglikelihoods_max
+        loglikelihoods = np.reshape(loglikelihoods, (N))
+        return loglikelihoods
+
+    def get_prior_log_density_max(self):
+        """ Return max value of log density based on current parameters
+
+        Returns max_{x,x'} log q(x | x', parameters)
+        """
+        sigma2_nojump = self.parameters.sigma2
+        sigma2_jump = self.parameters.sigma2 + self.parameters.sigmaJ2
+        pJ = self.parameters.pJ
+
+        n = np.shape(sigma2_nojump)[0]
+        loglikelihood_max_nojump = \
+                -0.5*n*np.log(2.0*np.pi) - 0.5*np.log(sigma2_nojump)
+        loglikelihood_max_jump = \
+                -0.5*n*np.log(2.0*np.pi) - 0.5*np.log(sigma2_jump)
+        loglikelihood_max = logsumexp(
+                a=[loglikelihood_max_jump, loglikelihood_max_nojump],
+                b=[pJ, 1-pJ],
+                )
+        return loglikelihood_max
+
+class SVJMAuxPriorKernel(SVJMPriorKernel):
+    def ancestor_log_weights(self, x_t, log_weights):
+        """ Weights for ancestor sampling
+
+        Prob(k^i) \propto w^i_t * Pr(y_{t+1} | E[x_{t+1} | x^i_t])
+
+        """
+        diff = self.y_next
+        x_next_mean = x_t * self.parameters.phi
+        log_one_step_ahead = \
+                    -0.5*np.log(2.0*np.pi) + \
+                    -0.5*(diff**2)*np.exp(-x_next_mean)*self.parameters.tau2inv + \
+                    np.log(self.parameters.Ltau2inv) + \
+                    -0.5*x_next_mean
+        log_one_step_ahead = np.reshape(log_one_step_ahead, log_weights.shape)
+        return log_weights + log_one_step_ahead
+
+    def reweight(self, x_t, x_next, **kwargs):
+        """ Reweight function for Aux Prior Kernel for SVJM
+
+        weight_t = Pr(y_{t+1} | x_{t+1}) / Pr(y_{t+1} | x_t)
+
+        Args:
+            x_t (ndarray): N by n, x_t
+            x_next (ndarray): N by n, x_{t+1}
+        Return:
+            log_weights (ndarray): N, importance weights
+
+        """
+        N = np.shape(x_next)[0]
+        if (len(np.shape(x_t)) > 1) and (np.shape(x_t)[1] > 1):
+            # n > 1
+            raise NotImplementedError()
+        else:
+            # n = 1, x is scalar
+            diff = self.y_next
+            log_weights = \
+                    -0.5*np.log(2.0*np.pi) + \
+                    -0.5*(diff**2)*np.exp(-x_next)*self.parameters.tau2inv + \
+                    np.log(self.parameters.Ltau2inv) + \
+                    -0.5*x_next
+            x_next_mean = x_t * self.parameters.phi
+            log_one_step_ahead = \
+                    -0.5*np.log(2.0*np.pi) + \
+                    -0.5*(diff**2)*np.exp(-x_next_mean)*self.parameters.tau2inv + \
+                    np.log(self.parameters.Ltau2inv) + \
+                    -0.5*x_next_mean
+        log_weights = np.reshape(log_weights - log_one_step_ahead, (N))
+        return log_weights
+
+class SVJMCustomKernel(Kernel):
+    def __init__(self, **kwargs):
+        self.parameters = kwargs.get('parameters', None)
+        self.y_next = kwargs.get('y_next', None)
+        self.frac_weight = kwargs.get('frac_weight', 0.5)
+        return
+
+    @property
+    def q_pJ(self):
+        return self.parameters.pJ*self.frac_weight + 0.5*(1-self.frac_weight)
+
+    def rv(self, x_t, **kwargs):
+        """ Custom Kernel for SVJM
+
+        Sample x_{t+1} ~ q(x_{t+1} | x_t, parameters)
+
+        Args:
+            x_t (ndarray): N by n, x_t
+        Return:
+            x_next (ndarray): N by n, x_{t+1}
+
+        """
+        if (len(np.shape(x_t)) > 1) and (np.shape(x_t)[1] > 1):
+            # x is vector
+            x_next_mean = x_t.dot(self.parameters.phi.T)
+            x_next = np.linalg.solve(self.parameters.Lsigma2inv.T,
+                    np.random.normal(size=x_t.shape).T).T + x_next_mean
+            J_next = np.random.rand(np.shape(x_t)[0]) < self.q_pJ
+            x_next += J_next[:, np.newaxis] * np.linalg.solve(
+                    self.parameters.LsigmaJ2inv.T,
+                    np.random.normal(size=x_t.shape).T).T
+            return x_next
+        else:
+            # n = 1, x is scalar
+            x_next_mean = x_t * self.parameters.phi
+            x_next = self.parameters.Lsigma2inv**-1 * np.random.normal(
+                    size=x_t.shape) + x_next_mean
+            J_next = np.random.rand(np.shape(x_t)[0]) < self.q_pJ
+            x_next += (np.random.normal(size=x_t.shape) *
+                    J_next[:, np.newaxis]*self.parameters.LsigmaJ2inv[0,0]**-1)
+            return x_next
+
+    def reweight(self, x_t, x_next, **kwargs):
+        """ Reweight function for Prior Kernel for SVJM
+
+        weight_t = Pr(y_{t+1} x_{t+1} | x_t, parameters) / q(x_{t+1} | x_t)
+
+        Args:
+            x_t (ndarray): N by n, x_t
+            x_next (ndarray): N by n, x_{t+1}
+        Return:
+            log_weights (ndarray): N, importance weights
+
+        """
+        N = np.shape(x_next)[0]
+        if (len(np.shape(x_t)) > 1) and (np.shape(x_t)[1] > 1):
+            # n > 1
+            raise NotImplementedError()
+        else:
+            # n = 1, x is scalar
+            diff = self.y_next
+            log_weights = \
+                    -0.5*np.log(2.0*np.pi) + \
+                    -0.5*(diff**2)*np.exp(-x_next)*self.parameters.tau2inv + \
+                    np.log(self.parameters.Ltau2inv) + \
+                    -0.5*x_next
+
+            x_diff = x_next - self.parameters.phi*x_t
+            sigma2_nojump = self.parameters.sigma2
+            sigma2_jump = self.parameters.sigma2 + self.parameters.sigmaJ2
+            pJ = self.parameters.pJ
+            q_pJ = self.q_pJ
+
+            loglikelihoods_nojump = -0.5*(x_diff**2)/sigma2_nojump+\
+                    -0.5*np.log(2.0*np.pi) - 0.5*np.log(sigma2_nojump)
+            loglikelihoods_jump = -0.5*(x_diff**2)/sigma2_jump+\
+                    -0.5*np.log(2.0*np.pi) - 0.5*np.log(sigma2_jump)
+            loglikelihoods_max = np.max(np.array([
+                loglikelihoods_jump, loglikelihoods_nojump]),
+                axis=0)
+            loglikelihoods = np.log(
+                    pJ*np.exp(loglikelihoods_jump-loglikelihoods_max) +
+                    (1-pJ)*np.exp(loglikelihoods_nojump-loglikelihoods_max)
+                    ) + loglikelihoods_max
+            q_loglikelihoods = np.log(
+                    q_pJ*np.exp(loglikelihoods_jump-loglikelihoods_max) +
+                    (1-q_pJ)*np.exp(loglikelihoods_nojump-loglikelihoods_max)
+                    ) + loglikelihoods_max
+            diff_loglike = loglikelihoods - q_loglikelihoods
+
+        log_weights = np.reshape(log_weights + diff_loglike, (N))
+        return log_weights
+
+    def sample_x0(self, prior_mean, prior_var, N, n):
+        """ Initialize x_t
+
+        Returns:
+            x_t (N by n ndarray)
+        """
+        x_t = np.random.normal(
+                loc=prior_mean,
+                scale=np.sqrt(prior_var),
+                size=(N, n))
+        return x_t
+
+    def prior_log_density(self, x_t, x_next, **kwargs):
+        raise NotImplementedError()
+
+    def get_prior_log_density_max(self):
+        raise NotImplementedError()
+
+class SVJMAuxCustomKernel(SVJMCustomKernel):
+    def ancestor_log_weights(self, x_t, log_weights):
+        """ Weights for ancestor sampling
+
+        Prob(k^i) \propto w^i_t * Pr(y_{t+1} | E[x_{t+1} | x^i_t])
+
+        """
+        diff = self.y_next
+        x_next_mean = x_t * self.parameters.phi
+        log_one_step_ahead = \
+                    -0.5*np.log(2.0*np.pi) + \
+                    -0.5*(diff**2)*np.exp(-x_next_mean)*self.parameters.tau2inv + \
+                    np.log(self.parameters.Ltau2inv) + \
+                    -0.5*x_next_mean
+        log_one_step_ahead = np.reshape(log_one_step_ahead, log_weights.shape)
+        return log_weights + log_one_step_ahead
+
+    def reweight(self, x_t, x_next, **kwargs):
+        """ Reweight function for Aux Prior Kernel for SVJM
+
+        weight_t = Pr(y_{t+1} , x_{t+1} | x_t) / Pr(y_{t+1} | x_t) q(x_{t+1} | x_t)
+
+        Args:
+            x_t (ndarray): N by n, x_t
+            x_next (ndarray): N by n, x_{t+1}
+        Return:
+            log_weights (ndarray): N, importance weights
+
+        """
+        N = np.shape(x_next)[0]
+        if (len(np.shape(x_t)) > 1) and (np.shape(x_t)[1] > 1):
+            # n > 1
+            raise NotImplementedError()
+        else:
+            # n = 1, x is scalar
+            diff = self.y_next
+            log_weights = \
+                    -0.5*np.log(2.0*np.pi) + \
+                    -0.5*(diff**2)*np.exp(-x_next)*self.parameters.tau2inv + \
+                    np.log(self.parameters.Ltau2inv) + \
+                    -0.5*x_next
+            x_next_mean = x_t * self.parameters.phi
+            log_one_step_ahead = \
+                    -0.5*np.log(2.0*np.pi) + \
+                    -0.5*(diff**2)*np.exp(-x_next_mean)*self.parameters.tau2inv + \
+                    np.log(self.parameters.Ltau2inv) + \
+                    -0.5*x_next_mean
+
+            x_diff = x_next - self.parameters.phi*x_t
+            sigma2_nojump = self.parameters.sigma2
+            sigma2_jump = self.parameters.sigma2 + self.parameters.sigmaJ2
+            pJ = self.parameters.pJ
+            q_pJ = self.q_pJ
+
+            loglikelihoods_nojump = -0.5*(x_diff**2)/sigma2_nojump+\
+                    -0.5*np.log(2.0*np.pi) - 0.5*np.log(sigma2_nojump)
+            loglikelihoods_jump = -0.5*(x_diff**2)/sigma2_jump+\
+                    -0.5*np.log(2.0*np.pi) - 0.5*np.log(sigma2_jump)
+            loglikelihoods_max = np.max(np.array([
+                loglikelihoods_jump, loglikelihoods_nojump]),
+                axis=0)
+            loglikelihoods = np.log(
+                    pJ*np.exp(loglikelihoods_jump-loglikelihoods_max) +
+                    (1-pJ)*np.exp(loglikelihoods_nojump-loglikelihoods_max)
+                    ) + loglikelihoods_max
+            q_loglikelihoods = np.log(
+                    q_pJ*np.exp(loglikelihoods_jump-loglikelihoods_max) +
+                    (1-q_pJ)*np.exp(loglikelihoods_nojump-loglikelihoods_max)
+                    ) + loglikelihoods_max
+            diff_loglike = loglikelihoods - q_loglikelihoods
+
+
+        log_weights = np.reshape(
+                log_weights+diff_loglike-log_one_step_ahead,
+                (N))
         return log_weights
 
 # Bernoulli SSM Kernels:
@@ -481,7 +856,7 @@ class GARCHPriorKernel(Kernel):
         Returns max_{x,x'} log q(x | x', parameters)
         """
         alpha = self.parameters.alpha
-        loglikelihood_max = -0.5*np.log(2.0*np.pi) + np.log(alpha)
+        loglikelihood_max = -0.5*np.log(2.0*np.pi) - 0.5*np.log(alpha)
         return loglikelihood_max
 
     def rv(self, x_t, **kwargs):
@@ -567,7 +942,7 @@ class GARCHOptimalKernel(Kernel):
         Returns max_{x,x'} log q(x | x', parameters)
         """
         alpha = self.parameters.alpha
-        loglikelihood_max = -0.5*np.log(2.0*np.pi) + np.log(alpha)
+        loglikelihood_max = -0.5*np.log(2.0*np.pi) - 0.5*np.log(alpha)
         return loglikelihood_max
 
 

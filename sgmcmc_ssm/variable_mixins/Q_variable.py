@@ -424,7 +424,7 @@ class QPrior(object):
         df_Qinv = self.hyperparams['df_Qinv']
 
         grad_LQinv = np.array([
-            (df_Qinv_k - self.dim['m'] - 1) * np.linalg.inv(LQinv_k.T) - \
+            (df_Qinv_k - self.dim['n'] - 1) * np.linalg.inv(LQinv_k.T) - \
             np.linalg.solve(scale_Qinv_k, LQinv_k)
             for LQinv_k, df_Qinv_k, scale_Qinv_k in zip(
                 parameters.LQinv, df_Qinv, scale_Qinv)
@@ -523,7 +523,7 @@ class QPreconditioner(object):
         LQinv = parameters.LQinv
         precond_LQinv = np.array([
             np.dot(np.sqrt(0.5)*LQinv[k],
-                np.random.normal(loc=0, size=(parameters.m, parameters.m)),
+                np.random.normal(loc=0, size=(parameters.n, parameters.n)),
                 )
             for k in range(parameters.num_states)
             ])

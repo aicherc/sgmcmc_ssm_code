@@ -106,6 +106,36 @@ def create_desktop_jobs(
 
     return bash_file_masters
 
+def make_path(path):
+    # Helper function for making directories
+    if path is not None:
+        if not os.path.isdir(path):
+            if os.path.exists(path):
+                raise ValueError(
+        "path {0} is any existing file location!".format(path)
+                            )
+            else:
+                # To avoid race conditions
+                wait_time = np.random.rand()*2
+                logging.info("Pausing for {0:2.2f} sec to make {1}".format(
+                    wait_time, path))
+                time.sleep(wait_time)
+                if os.path.isdir(path):
+                    return
+
+                # Make Dirs
+                try:
+                    os.makedirs(path)
+                except OSError as e:
+                    logger.error(e.strerror)
+                    import errno
+                    if e.errno == errno.EEXIST:
+                        logger.info("Ignoring Race Condition Error")
+                        pass
+                    else:
+                        raise e
+    return
+
 class TqdmToLogger(io.StringIO):
     """
         Output stream for TQDM which will output to logger module instead of

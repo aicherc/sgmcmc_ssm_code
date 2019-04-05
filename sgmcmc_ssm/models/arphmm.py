@@ -272,7 +272,7 @@ class ARPHMMHelper(HMMHelper):
         return P_t, log_constant
 
     def gradient_marginal_loglikelihood(self, observations, parameters,
-            forward_message=None, backward_message=None,
+            forward_message=None, backward_message=None, weights=None,
             tqdm=None):
         # Forward Pass
         forward_messages = self.forward_pass(observations, parameters,
@@ -301,6 +301,8 @@ class ARPHMMHelper(HMMHelper):
             s_t = np.dot(r_t, Pi)
             q_t = backward_t['likelihood_vector']
 
+            weight_t = 1.0 if weights is None else weights[t]
+
             # Calculate P_t = Pr(y_t | z_t)
             y_cur = observations[t]
             P_t, _ = self._likelihoods(
@@ -316,10 +318,10 @@ class ARPHMMHelper(HMMHelper):
             # Grad for pi
             if parameters.pi_type == "logit":
                 # Gradient of logit_pi
-                grad['logit_pi'] += joint_post - \
-                        np.diag(np.sum(joint_post, axis=1)).dot(Pi)
+                grad['logit_pi'] += weight_t * (joint_post - \
+                        np.diag(np.sum(joint_post, axis=1)).dot(Pi))
             elif parameters.pi_type == "expanded":
-                grad['expanded_pi'] += np.array([
+                grad['expanded_pi'] += weight_t * np.array([
                     (expanded_pi[k]**-1)*(
                         joint_post[k] - np.sum(joint_post[k])*Pi[k])
                     for k in range(self.num_states)
@@ -332,9 +334,9 @@ class ARPHMMHelper(HMMHelper):
             for k, D_k, LRinv_k, Rinv_k, R_k in zip(
                     range(self.num_states), D, LRinv, Rinv, R):
                     diff_k = y_cur[0] - np.dot(D_k, y_prev)
-                    grad['D'][k] += \
-                            np.outer(Rinv_k.dot(diff_k), y_prev) * marg_post[k]
-                    grad['LRinv'][k] += (
+                    grad['D'][k] += weight_t * (
+                            np.outer(Rinv_k.dot(diff_k), y_prev) * marg_post[k])
+                    grad['LRinv'][k] += weight_t * (
                             (R_k - np.outer(diff_k, diff_k)).dot(LRinv_k)
                             ) * marg_post[k]
 

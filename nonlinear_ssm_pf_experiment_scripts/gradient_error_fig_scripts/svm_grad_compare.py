@@ -8,12 +8,11 @@ import time
 import joblib
 import os
 
-from sgmcmc_ssm.models.garch import (
-        GARCHParameters,
-        GARCHSampler,
-        GARCHPrior,
-        generate_garch_data,
-        GARCHHelper,
+from sgmcmc_ssm.models.svm import ( SVMParameters,
+        SVMSampler,
+        SVMPrior,
+        generate_svm_data,
+        SVMHelper,
         )
 from tqdm import tqdm
 
@@ -33,34 +32,27 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
 
 
     # Generate Data
-    alpha, beta, gamma, tau = pars[0], pars[1], pars[2], pars[3]
-    R = np.eye(1)*tau**2
+    A = np.eye(1) * pars[0]
+    Q = np.eye(1) * pars[1]
+    R = np.eye(1) * pars[2]
 
-    log_mu, logit_phi, logit_lambduh = \
-            GARCHParameters.convert_alpha_beta_gamma(alpha, beta, gamma)
+    LQinv = np.linalg.cholesky(np.linalg.inv(Q))
     LRinv = np.linalg.cholesky(np.linalg.inv(R))
-    parameters = GARCHParameters(
-            log_mu=log_mu,
-            logit_phi=logit_phi,
-            logit_lambduh=logit_lambduh,
-            LRinv=LRinv,
-            )
-    parameters_dict = parameters.as_dict().copy()
+    parameters = SVMParameters(A=A, LQinv=LQinv, LRinv=LRinv)
 
     def convert_gradient(grad_dict):
         return [
-            grad_dict['log_mu'],
-            grad_dict['logit_phi'],
-            grad_dict['logit_lambduh'],
+            grad_dict['A'],
+            grad_dict['LQinv'],
             grad_dict['LRinv'],
             ]
 
     results_dfs = []
     for trial in tqdm(range(N_trials), desc="Trial"):
-        data = generate_garch_data(T=T, parameters=parameters, tqdm=tqdm)
+        data = generate_svm_data(T=T, parameters=parameters, tqdm=tqdm)
         t0 = (T+L)//2
         observations = data['observations']
-        helper = GARCHHelper(forward_message=data['initial_message'],
+        helper = SVMHelper(forward_message=data['initial_message'],
                 **parameters.dim)
 
 
@@ -69,7 +61,7 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
         full_buffer_gradients = [None]*10
         pbar = tqdm(range(10))
         pbar.set_description('Number of Reps')
-        buffer_size = 12
+        buffer_size = L
         pf_kwargs = dict(
             observations=observations[t0-buffer_size:t0+L+buffer_size],
             parameters=parameters,
@@ -135,7 +127,7 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
 
 
         dfs = []
-        variables = ['log_mu', 'logit_phi', 'logit_lambduh', 'LRinv']
+        variables = ['A', 'LQinv', 'LRinv']
         for buffer_size, estimates, runtimes in zip(buffer_sizes, estimates_bs, runtimes_bs):
             for key, value in estimates.items():
                 df = pd.DataFrame(np.array(value), columns=variables)
@@ -218,19 +210,18 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
 if __name__ == "__main__":
     N_reps = 100 #number of repetitions
     N_trials = 100
-    buffer_sizes = np.array([8, 6, 4, 3, 2, 1, 0])
-    alpha = 0.1
-    beta = 0.8
-    gamma = 0.05
-    tau = 0.3
+    buffer_sizes = np.array([8, 6, 4, 2, 1, 0])
+    A = 0.95
+    Q = 0.5
+    R = 0.5
 
     # Set 1
     T = 100 #length of series
     L = 16
-    pars = np.array((alpha, beta, gamma, tau))
+    pars = np.array((A, Q, R))
     path_to_out = os.path.join(
-            "./scratch/garch_grad_compare/",
-            "{0}".format(tuple(pars))
+            "./scratch/svm_grad_compare/",
+            "{0}".format(tuple(pars)))
     make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out)
 
 

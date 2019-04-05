@@ -13,7 +13,7 @@ def pf_wrapper(
         observations, parameters, N,
         kernel, smoother,
         additive_statistic_func, statistic_dim,
-        t1=0, tL=None,
+        t1=0, tL=None, weights=None,
         prior_mean = 0.0, prior_var = 1.0,
         tqdm = None, tqdm_name = None,
         save_all=False, elementwise_statistic=False,
@@ -30,6 +30,7 @@ def pf_wrapper(
         statistic_dim (int): dimension of additive_statistic_func return array
         t1 (int): relative start of left buffer
         tL (int): relative end of right buffer (exclusive, buffer is [t1, tL-1])
+        weights (ndarray): weights for the additive statistics over [t1, tL)
         prior_mean (ndarray): prior mean for latent variable
         prior_var (ndarray): prior var for latent variable
         tqdm (optional): progress bar
@@ -86,8 +87,10 @@ def pf_wrapper(
         kernel.set_y_next(y_next=observations[t])
         # Only Sum over terms not in the buffer
         if t < t1 or t >= tL:
+            weight_t = 1.0
             additive_statistic_func_t = zero_statistics
         else:
+            weight_t = 1.0 if weights is None else weights[t-t1]
             additive_statistic_func_t = functools.partial(
                     additive_statistic_func,
                     y_next = observations[t],
@@ -104,10 +107,12 @@ def pf_wrapper(
                 x_t, log_weights, statistics,
                 additive_statistic_func=additive_statistic_func_t,
                 kernel=kernel,
+                additive_scale=weight_t,
                 **kwargs,
                 )
+
         if (t >= t1) and (t < tL):
-            loglikelihood_estimate += np.log(np.mean(np.exp(log_weights)))
+            loglikelihood_estimate += weight_t * np.log(np.mean(np.exp(log_weights)))
 
         if save_all:
             all_x_t.append(x_t)

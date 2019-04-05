@@ -142,20 +142,17 @@ class SGMCMCSampler(object):
                         forward_message=self.forward_message)
                 # Noisy Loglikelihood should use only forward pass
                 # E.g. log Pr(y) \approx \sum_s log Pr(y_s | y<min(s))
-                loglikelihood_S = self.message_helper.marginal_loglikelihood(
+                noisy_loglikelihood += (
+                self.message_helper.marginal_loglikelihood(
                     observations=observations[
                             out['subsequence_start']:out['subsequence_end']
                             ],
                     parameters=self.parameters,
+                    weights=out['weights'],
                     forward_message=forward_message,
                     backward_message=self.backward_message,
                     ) - forward_message['log_constant']
-                noisy_loglikelihood += (
-                        loglikelihood_S * T/(
-                            out['subsequence_end'] - out['subsequence_start']
-                        ))
-            noisy_loglikelihood *= 1.0/minibatch_size
-            return noisy_loglikelihood
+                )
 
         elif kind == 'complete':
             for s in range(0, minibatch_size):
@@ -163,7 +160,6 @@ class SGMCMCSampler(object):
                         buffer_length=buffer_length,
                         subsequence_length=subsequence_length,
                         T=T)
-
 
                 buffer_ = observations[
                         out['left_buffer_start']:out['right_buffer_end']
@@ -182,16 +178,16 @@ class SGMCMCSampler(object):
                     forward_message = dict(
                             x_prev = latent_buffer[relative_start-1]
                             )
-                loglikelihood_S = \
+                noisy_loglikelihood += \
                     self.message_helper.complete_data_loglikelihood(
                         observations=observations[
                                 out['subsequence_start']:out['subsequence_end']
                                 ],
                         latent_vars=latent_buffer[relative_start:relative_end],
+                        weights=out['weights'],
                         parameters=self.parameters,
                         forward_message=forward_message,
                         )
-
 
         elif kind == 'pf':
             if kwargs.get("N", None) is None:
@@ -211,25 +207,23 @@ class SGMCMCSampler(object):
                             out['left_buffer_start']:
                             out['right_buffer_end']
                             ]
-                noisy_loglike_add = (
+                noisy_loglikelihood += (
                     self.message_helper
                     .pf_loglikelihood_estimate(
                         observations=buffer_,
                         parameters=self.parameters,
+                        weights=out['weights'],
                         subsequence_start=relative_start,
                         subsequence_end=relative_end,
                         **kwargs)
                     )
-                noisy_loglikelihood += noisy_loglike_add * 1.0*T/(
-                        out['subsequence_end'] - out['subsequence_start']
-                        )
-
-            noisy_loglikelihood *= 1.0/minibatch_size
-            if np.isnan(noisy_loglikelihood):
-                raise ValueError("NaNs in loglikelihood")
-            return noisy_loglikelihood
         else:
             raise ValueError("Unrecognized kind = {0}".format(kind))
+
+        noisy_loglikelihood *= 1.0/minibatch_size
+        if np.isnan(noisy_loglikelihood):
+            raise ValueError("NaNs in loglikelihood")
+        return noisy_loglikelihood
 
     def noisy_logjoint(self, return_loglike=False, **kwargs):
         """ Return the loglikelihood + logprior given the current parameters """
@@ -258,15 +252,13 @@ class SGMCMCSampler(object):
             T = self.T
         if buffer_length == -1:
             buffer_length = T
-        if subsequence_length == -1:
+        if (subsequence_length == -1) or (T-subsequence_length <= 0):
             subsequence_start = 0
             subsequence_end = T
-        elif T - subsequence_length <= 0:
-            subsequence_start = 0
-            subsequence_end = T
+            weights = None
         else:
-            subsequence_start, subsequence_end = \
-                    random_subsequence_and_buffers_helper(
+            subsequence_start, subsequence_end, weights = \
+                    random_subsequence_and_weights(
                             subsequence_length=subsequence_length,
                             T=T,
                             options=self.options,
@@ -275,173 +267,151 @@ class SGMCMCSampler(object):
         left_buffer_start = max(0, subsequence_start - buffer_length)
         right_buffer_end = min(T, subsequence_end + buffer_length)
 
-
         out = dict(
             subsequence_start = subsequence_start,
             subsequence_end = subsequence_end,
             left_buffer_start = left_buffer_start,
             right_buffer_end = right_buffer_end,
+            weights = weights,
             )
         return out
 
-    def _noisy_grad_loglikelihood(self, kind='marginal',
-            subsequence_length=-1, minibatch_size=1, buffer_length=0,
-            num_samples=None, observations=None, **kwargs):
+    def _single_noisy_grad_loglikelihood(self, buffer_dict, kind='marginal',
+            num_samples=None, observations=None, parameters=None, **kwargs):
+        # buffer_dict is the output of _random_subsequence_and_buffers
         if observations is None:
             observations = self.observations
+        if parameters is None:
+            parameters = self.parameters
         T = observations.shape[0]
         if kind == 'marginal':
-            noisy_grad = {var: np.zeros_like(value)
-                    for var, value in self.parameters.as_dict().items()}
-
-            for s in range(0, minibatch_size):
-                out = self._random_subsequence_and_buffers(buffer_length,
-                        subsequence_length=subsequence_length,
-                        T=T)
-                forward_message = self.message_helper.forward_message(
-                        observations[
-                            out['left_buffer_start']:out['subsequence_start']
-                            ],
-                        self.parameters,
-                        forward_message=self.forward_message)
-
-                backward_message = self.message_helper.backward_message(
-                        observations[
-                            out['subsequence_end']:out['right_buffer_end']
-                            ],
-                        self.parameters,
-                        backward_message=self.backward_message,
-                        )
-
-                gradient_kwargs = dict(
-                    observations=observations[
-                        out['subsequence_start']:out['subsequence_end']
+            forward_message = self.message_helper.forward_message(
+                    observations[
+                        buffer_dict['left_buffer_start']:
+                        buffer_dict['subsequence_start']
                         ],
-                    parameters=self.parameters,
+                    parameters,
+                    forward_message=self.forward_message)
+
+            backward_message = self.message_helper.backward_message(
+                    observations[
+                        buffer_dict['subsequence_end']:
+                        buffer_dict['right_buffer_end']
+                        ],
+                    parameters,
+                    backward_message=self.backward_message,
+                    )
+
+            noisy_grad = (
+                self.message_helper
+                .gradient_marginal_loglikelihood(
+                    observations=observations[
+                        buffer_dict['subsequence_start']:
+                        buffer_dict['subsequence_end']
+                        ],
+                    parameters=parameters,
+                    weights=buffer_dict['weights'],
                     forward_message=forward_message,
                     backward_message=backward_message,
+                    **kwargs
                     )
-                gradient_kwargs.update(**kwargs)
-                noisy_grad_add = (
-                    self.message_helper
-                    .gradient_marginal_loglikelihood(
-                        **gradient_kwargs
-                        )
-                    )
-                for var in noisy_grad:
-                    noisy_grad[var] += noisy_grad_add[var] * 1.0*T/(
-                        out['subsequence_end'] -
-                        out['subsequence_start']
-                        )
-
-            for var in noisy_grad:
-                noisy_grad[var] *= 1.0/minibatch_size
-
-                if np.any(np.isnan(noisy_grad[var])):
-                    raise ValueError("NaNs in gradient of {0}".format(var))
-                if np.linalg.norm(noisy_grad[var]) > 1e16:
-                    logger.warning("Norm of noisy_grad_loglike[{1} > 1e16: {0}".format(
-                        noisy_grad[var], var))
-            return noisy_grad
-
+                )
         elif kind == 'complete':
-            noisy_grad = {var: np.zeros_like(value)
-                for var, value in self.parameters.as_dict().items()}
-
-            for s in range(0, minibatch_size):
-                out = self._random_subsequence_and_buffers(
-                        buffer_length=buffer_length,
-                        subsequence_length=subsequence_length,
-                        T=T)
-
-
-                buffer_ = observations[
-                        out['left_buffer_start']:out['right_buffer_end']
-                        ]
-                # Draw Samples:
-                latent_buffer = self.sample_x(
-                        parameters=self.parameters,
-                        observations=buffer_,
-                        num_samples=num_samples,
-                        )
-                relative_start = out['subsequence_start']-out['left_buffer_start']
-                relative_end = out['subsequence_end']-out['left_buffer_start']
-                forward_message = {}
-                if relative_start > 0:
-                    forward_message = dict(
-                            x_prev = latent_buffer[relative_start-1]
-                            )
-                noisy_grad_add = (
-                    self.message_helper
-                    .gradient_complete_data_loglikelihood(
-                        observations=observations[
-                            out['subsequence_start']:out['subsequence_end']
-                            ],
-                        latent_vars=latent_buffer[relative_start:relative_end],
-                        parameters=self.parameters,
-                        forward_message=forward_message,
-                        **kwargs)
+            buffer_ = observations[
+                    buffer_dict['left_buffer_start']:
+                    buffer_dict['right_buffer_end']
+                    ]
+            # Draw Samples:
+            latent_buffer = self.sample_x(
+                    parameters=parameters,
+                    observations=buffer_,
+                    num_samples=num_samples,
                     )
-                for var in noisy_grad:
-                    noisy_grad[var] += noisy_grad_add[var] * 1.0*T/(
-                        out['subsequence_end'] -
-                        out['subsequence_start']
+            relative_start = (buffer_dict['subsequence_start'] -
+                    buffer_dict['left_buffer_start'])
+            relative_end = (buffer_dict['subsequence_end'] -
+                    buffer_dict['left_buffer_start'])
+            forward_message = {}
+            if relative_start > 0:
+                forward_message = dict(
+                        x_prev = latent_buffer[relative_start-1]
                         )
-            for var in noisy_grad:
-                noisy_grad[var] *= 1.0/minibatch_size
-
-                if np.any(np.isnan(noisy_grad[var])):
-                    raise ValueError("NaNs in gradient of {0}".format(var))
-                if np.linalg.norm(noisy_grad[var]) > 1e16:
-                    logger.warning("Norm of noisy_grad_loglike[{1} > 1e16: {0}".format(
-                        noisy_grad_loglike, var))
-            return noisy_grad
+            noisy_grad = (
+                self.message_helper
+                .gradient_complete_data_loglikelihood(
+                    observations=observations[
+                        buffer_dict['subsequence_start']:
+                        buffer_dict['subsequence_end']
+                        ],
+                    latent_vars=latent_buffer[relative_start:relative_end],
+                    parameters=parameters,
+                    weights=buffer_dict['weights'],
+                    forward_message=forward_message,
+                    **kwargs)
+                )
 
         elif kind == 'pf':
             if kwargs.get("N", None) is None:
                 kwargs['N'] = num_samples
-
-            noisy_grad = {var: np.zeros_like(value, dtype=float)
-                for var, value in self.parameters.as_dict().items()}
-
-            for s in range(0, minibatch_size):
-                out = self._random_subsequence_and_buffers(
-                        buffer_length=buffer_length,
-                        subsequence_length=subsequence_length,
-                        T=T)
-                relative_start = (out['subsequence_start'] -
-                        out['left_buffer_start'])
-                relative_end = (out['subsequence_end'] -
-                        out['left_buffer_start'])
-                buffer_ = observations[
-                            out['left_buffer_start']:
-                            out['right_buffer_end']
-                            ]
-                noisy_grad_add = (
-                    self.message_helper
-                    .pf_score_estimate(
-                        observations=buffer_,
-                        parameters=self.parameters,
-                        subsequence_start=relative_start,
-                        subsequence_end=relative_end,
-                        **kwargs)
-                    )
-                for var in noisy_grad:
-                    noisy_grad[var] += noisy_grad_add[var] * 1.0*T/(
-                        out['subsequence_end'] -
-                        out['subsequence_start']
-                        )
-
-            for var in noisy_grad:
-                noisy_grad[var] *= 1.0/minibatch_size
-                if np.any(np.isnan(noisy_grad[var])):
-                    raise ValueError("NaNs in gradient of {0}".format(var))
-                if np.linalg.norm(noisy_grad[var]) > 1e16:
-                    logger.warning("Norm of noisy_grad_[{1}] > 1e16: {0}".format(
-                        noisy_grad[var], var))
-            return noisy_grad
+            relative_start = (buffer_dict['subsequence_start'] -
+                    buffer_dict['left_buffer_start'])
+            relative_end = (buffer_dict['subsequence_end'] -
+                    buffer_dict['left_buffer_start'])
+            buffer_ = observations[
+                        buffer_dict['left_buffer_start']:
+                        buffer_dict['right_buffer_end']
+                        ]
+            noisy_grad = (
+                self.message_helper
+                .pf_score_estimate(
+                    observations=buffer_,
+                    parameters=self.parameters,
+                    subsequence_start=relative_start,
+                    subsequence_end=relative_end,
+                    weights=buffer_dict['weights'],
+                    **kwargs)
+                )
         else:
             raise ValueError("Unrecognized kind = {0}".format(kind))
+
+        return noisy_grad
+
+    def _noisy_grad_loglikelihood(self,
+            subsequence_length=-1, minibatch_size=1, buffer_length=0,
+            observations=None, buffer_dicts=None, **kwargs):
+        if observations is None:
+            observations = self.observations
+        T = observations.shape[0]
+
+        if buffer_dicts is None:
+            buffer_dicts = [
+                self._random_subsequence_and_buffers(
+                    buffer_length=buffer_length,
+                    subsequence_length=subsequence_length,
+                    T=T)
+                for _ in range(minibatch_size)
+                ]
+        elif len(buffer_dicts) != minibatch_size:
+            raise ValueError("len(buffer_dicts != minibatch_size")
+
+        noisy_grad = {var: np.zeros_like(value)
+                for var, value in self.parameters.as_dict().items()}
+
+        for s in range(0, minibatch_size):
+            noisy_grad_add = self._single_noisy_grad_loglikelihood(
+                    buffer_dict=buffer_dicts[s],
+                    observations=observations,
+                    **kwargs,
+                    )
+            for var in noisy_grad:
+                noisy_grad[var] += noisy_grad_add[var] * 1.0/minibatch_size
+
+        if np.any(np.isnan(noisy_grad[var])):
+            raise ValueError("NaNs in gradient of {0}".format(var))
+        if np.linalg.norm(noisy_grad[var]) > 1e16:
+            logger.warning("Norm of noisy_grad_loglike[{1} > 1e16: {0}".format(
+                noisy_grad[var], var))
+        return noisy_grad
 
     def noisy_gradient(self, preconditioner=None, is_scaled=True, **kwargs):
         """ Noisy Gradient Estimate
@@ -464,7 +434,8 @@ class SGMCMCSampler(object):
         noisy_grad_loglike = \
                 self._noisy_grad_loglikelihood(**kwargs)
         noisy_grad_prior = self.prior.grad_logprior(
-                parameters=self.parameters)
+                parameters=kwargs.get('parameters',self.parameters),
+                )
         noisy_gradient = {var: noisy_grad_prior[var] + noisy_grad_loglike[var]
                 for var in noisy_grad_prior}
 
@@ -475,7 +446,7 @@ class SGMCMCSampler(object):
         else:
             scale = 1.0/self.T if is_scaled else 1.0
             noisy_gradient = preconditioner.precondition(noisy_gradient,
-                    parameters=self.parameters,
+                    parameters=kwargs.get('parameters',self.parameters),
                     scale=scale)
 
         return noisy_gradient
@@ -578,6 +549,49 @@ class SGMCMCSampler(object):
         delta = self.noisy_gradient(**kwargs)
         white_noise = self._get_sgmcmc_noise(**kwargs)
 
+        for var in self.parameters.var_dict:
+            self.parameters.var_dict[var] += \
+                epsilon * delta[var] + np.sqrt(2.0*epsilon) * white_noise[var]
+        return self.parameters
+
+    def sample_sgld_cv(self, epsilon, centering_parameters, centering_gradient,
+            **kwargs):
+        """ One Step of Stochastic Gradient Langevin Dynamics with Control Variates
+
+        grad = full_gradient(centering_parameters) + \
+                sub_gradient(parameters) - sub_gradient(centering_gradient)
+
+        Args:
+            epsilon (double): step size
+            centering_parameters (Parameters): centering parameters
+            centering_gradient (dict): full data grad of centering_parameters
+            **kwargs (kwargs): to pass to self.noisy_gradient
+
+        Returns:
+            parameters (Parameters): sampled parameters after one step
+        """
+        if "preconditioner" in kwargs:
+            raise ValueError("Use SGRLD instead")
+        buffer_dicts = [
+            self._random_subsequence_and_buffers(
+                buffer_length=kwargs.get('buffer_length', 0),
+                subsequence_length=kwargs.get('subsequence_length', -1),
+                T=kwargs.get('T', self.T))
+            for _ in range(kwargs.get('minibatch_size', 1))
+            ]
+
+        cur_subseq_grad = self.noisy_gradient(
+                buffer_dicts=buffer_dicts, **kwargs)
+        centering_subseq_grad = self.noisy_gradient(
+                parameters=centering_parameters,
+                buffer_dicts=buffer_dicts, **kwargs)
+
+        delta = {}
+        for var in cur_subseq_grad.keys():
+            delta[var] = centering_gradient[var] + \
+                    cur_subseq_grad[var] - centering_subseq_grad[var]
+
+        white_noise = self._get_sgmcmc_noise(**kwargs)
         for var in self.parameters.var_dict:
             self.parameters.var_dict[var] += \
                 epsilon * delta[var] + np.sqrt(2.0*epsilon) * white_noise[var]
@@ -856,15 +870,19 @@ class SGMCMCHelper(object):
             return backward_messages[1:]
 
     def marginal_loglikelihood(self, observations, parameters,
-            forward_message, backward_message):
+            forward_message, backward_message, weights=None):
         raise NotImplementedError()
 
     def predictive_loglikelihood(self, observations, parameters,
             forward_message, backward_message, lag):
         raise NotImplementedError()
 
+    def complete_data_loglikelihood(self, observations, latent_vars, parameters,
+            forward_message, weights=None, **kwargs):
+        raise NotImplementedError()
+
     def gradient_marginal_loglikelihood(self, observations, parameters,
-            forward_message, backward_message, **kwargs):
+            forward_message, backward_message, weights=None, **kwargs):
         """ Gradient Calculation
 
         Gradient of log Pr(y_[0:T) | y_<0, y_>=T, parameters)
@@ -874,11 +892,16 @@ class SGMCMCHelper(object):
             parameters (Parameters): parameters
             forward_message (dict): Pr(u_-1, y_<0 | parameters)
             backward_message (dict): Pr(y_>T | u_T, parameters)
+            weights (ndarray): how to weight terms
 
         Returns
             grad (dict): grad of variables in parameters
 
         """
+        raise NotImplementedError()
+
+    def gradient_complete_data_loglikelihood(self, observations, latent_vars,
+            parameters, forward_message, weights=None, **kwargs):
         raise NotImplementedError()
 
     def parameters_gibbs_sample(self, observations, latent_vars, prior,
@@ -949,7 +972,7 @@ class SGMCMCHelper(object):
         return self._backward_messages(observations, parameters,
                 backward_message, **kwargs)[0]
 
-    def pf_score_estimate(self, observations, parameters,
+    def pf_score_estimate(self, observations, parameters, weights,
             subsequence_start=0, subsequence_end=None,
             pf="poyiadjis_N", N=100, kernel='prior',
             **kwargs):
@@ -958,6 +981,7 @@ class SGMCMCHelper(object):
         Args:
             observations (ndarray): num_obs bufferd observations
             parameters (Parameters): parameters
+            weights (ndarray): weights (to correct storchastic approx)
             subsequence_start (int): relative start of subsequence
                 (0:subsequence_start are left buffer)
             subsequence_end (int): relative end of subsequence
@@ -979,7 +1003,7 @@ class SGMCMCHelper(object):
         """
         raise NotImplementedError()
 
-    def pf_loglikelihood_estimate(self, observations, parameters,
+    def pf_loglikelihood_estimate(self, observations, parameters, weights,
             subsequence_start=0, subsequence_end=None,
             pf="poyiadjis_N", N=1000, kernel='prior',
             **kwargs):
@@ -988,6 +1012,7 @@ class SGMCMCHelper(object):
         Args:
             observations (ndarray): num_obs bufferd observations
             parameters (Parameters): parameters
+            weights (ndarray): weights (to correct storchastic approx)
             subsequence_start (int): relative start of subsequence
                 (0:subsequence_start are left buffer)
             subsequence_end (int): relative end of subsequence
@@ -1091,5 +1116,79 @@ def random_subsequence_and_buffers_helper(subsequence_length, T, options):
             subsequence_end = T
 
     return int(subsequence_start), int(subsequence_end)
+
+
+def random_subsequence_and_weights(subsequence_length, T, options):
+    """ Get Subsequence + Weights
+    Returns:
+        subsequence_start (int): start of subsequence (inclusive)
+        subsequence_end (int): end of subsequence (exclusive)
+        weights (ndarray): weights for [start,end)
+    """
+    if options.get("strict_partition", False):
+        if T % subsequence_length != 0:
+            raise ValueError(
+        "subsequence_length {0} does not evenly divide T {1}".format(
+            subsequence_length, T)
+        )
+        subsequence_start = \
+            np.random.choice(np.arange(0, T//subsequence_length)) * \
+            subsequence_length
+        subsequence_end = subsequence_start + subsequence_length
+        weights = np.ones(subsequence_length, dtype=float)*T/subsequence_length
+    elif options.get("naive_partition", False):
+        subsequence_start = \
+                np.random.randint(0, T-subsequence_length+1)
+        subsequence_end = subsequence_start + subsequence_length
+        t = np.arange(subsequence_start, subsequence_end)
+        if subsequence_end <= 2*subsequence_length:
+            num_sequences = np.min(np.array([
+                t+1,
+                np.ones_like(t)*min(subsequence_length, T-subsequence_length+1)
+                ]), axis=0)
+        elif subsequence_start >= T-2*subsequence_length-1:
+            num_sequences = np.min(np.array([
+                T-t,
+                np.ones_like(t)*min(subsequence_length, T-subsequence_length+1)
+                ]), axis=0)
+        else:
+            num_sequences = np.ones(subsequence_length)*subsequence_length
+        weights = np.ones(subsequence_length, dtype=float)*(T-subsequence_length+1)/num_sequences
+    else:
+        left_offset = np.random.choice(np.arange(
+                subsequence_length//2,
+                subsequence_length + subsequence_length//2))
+        right_offset = (T-left_offset) % subsequence_length
+        if right_offset < subsequence_length//2:
+            right_offset += subsequence_length
+
+        if right_offset + left_offset > T:
+            left_offset = T
+            right_offset = 0
+
+        # Check if we sample end points
+        choice = np.random.choice(
+                ['left', 'middle', 'right'],
+                p=1.0*np.array([
+                    left_offset,
+                    T-left_offset-right_offset,
+                    right_offset])/T,
+                )
+        if choice == 'middle':
+            T_offset = T-left_offset-right_offset
+            subsequence_start = np.random.choice(
+                    np.arange(0,T_offset//subsequence_length)
+                    ) * subsequence_length + left_offset
+            subsequence_end = subsequence_start + subsequence_length
+        elif choice == 'left':
+            subsequence_start = 0
+            subsequence_end = left_offset
+        else: # choice == "right"
+            subsequence_start = T-right_offset
+            subsequence_end = T
+        weights = (np.ones(subsequence_end-subsequence_start, dtype=float) *
+                T/(subsequence_end-subsequence_start))
+    return int(subsequence_start), int(subsequence_end), weights
+
 
 
