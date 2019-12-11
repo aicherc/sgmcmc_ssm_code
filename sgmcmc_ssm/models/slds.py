@@ -2,15 +2,20 @@ import numpy as np
 import logging
 logger = logging.getLogger(name=__name__)
 
-from ..base_parameter import (
+from ..base_parameters import (
         BaseParameters, BasePrior, BasePreconditioner,
         )
-from ..variable_mixins import (
-        PiMixin, PiPrior, PiPreconditioner,
-        AMixin, APrior, APreconditioner,
-        CSingleMixin, CSinglePrior, CSinglePreconditioner,
-        QMixin, QPrior, QPreconditioner,
-        RSingleMixin, RSinglePrior, RSinglePreconditioner,
+from ..variables import (
+        TransitionMatrixParamHelper, TransitionMatrixPriorHelper,
+        TransitionMatrixPrecondHelper,
+        SquareMatricesParamHelper, SquareMatricesPriorHelper,
+        SquareMatricesPrecondHelper,
+        RectMatrixParamHelper, RectMatrixPriorHelper,
+        RectMatrixPrecondHelper,
+        CovariancesParamHelper, CovariancesPriorHelper,
+        CovariancesPrecondHelper,
+        CovarianceParamHelper, CovariancePriorHelper,
+        CovariancePrecondHelper,
         )
 from ..sgmcmc_sampler import (
         SGMCMCSampler,
@@ -22,43 +27,59 @@ from .._utils import (
         lower_tri_mat_inv,
         )
 
-class SLDSParameters(RSingleMixin, QMixin, CSingleMixin, AMixin, PiMixin,
-        BaseParameters):
+class SLDSParameters(BaseParameters):
     """ SLDS Parameters """
+    _param_helper_list = [
+            TransitionMatrixParamHelper(name='pi', dim_names=['num_states', 'pi_type']),
+            SquareMatricesParamHelper(name='A', dim_names=['n', 'num_states']),
+            CovariancesParamHelper(name='Q', dim_names=['n', 'num_states']),
+            RectMatrixParamHelper(name='C', dim_names=['m', 'n']),
+            CovarianceParamHelper(name='R', dim_names=['m']),
+            ]
+    for param_helper in _param_helper_list:
+        properties = param_helper.get_properties()
+        for name, prop in properties.items():
+            vars()[name] = prop
+
     def __str__(self):
         my_str = "SLDSParameters:"
         my_str += "\npi:\n" + str(self.pi)
-        my_str += "\npi_type: `" + str(self.pi_type) + "`"
         my_str += "\nA:\n" + str(self.A)
         my_str += "\nC:\n" + str(self.C)
         my_str += "\nQ:\n" + str(self.Q)
         my_str += "\nR:\n" + str(self.R)
         return my_str
 
-    def project_parameters(self, **kwargs):
-        if kwargs.get('fix_C', True):
-            k = min(self.n, self.m)
-            C = self.C
-            C[0:k, 0:k] = np.eye(k)
-            self.C = C
-        return super().project_parameters(**kwargs)
-
-class SLDSPrior(RSinglePrior, QPrior, CSinglePrior, APrior, PiPrior,
-        BasePrior):
+class SLDSPrior(BasePrior):
     """ SLDS Prior
     See individual Prior Mixins for details
     """
-    @staticmethod
-    def _parameters(**kwargs):
-        return SLDSParameters(**kwargs)
+    _Parameters = SLDSParameters
+    _prior_helper_list = [
+            CovariancePriorHelper(name='R', dim_names=['m'],
+                matrix_name='C'),
+            CovariancesPriorHelper(name='Q', dim_names=['n', 'num_states'],
+                matrix_name='A'),
+            TransitionMatrixPriorHelper(name='pi', dim_names=['num_states']),
+            SquareMatricesPriorHelper(name='A', dim_names=['n', 'num_states'],
+                var_row_name='Q'),
+            RectMatrixPriorHelper(name='C', dim_names=['m', 'n'],
+                var_row_name='R'),
+            ]
 
-class SLDSPreconditioner(RSinglePreconditioner, QPreconditioner,
-        CSinglePreconditioner, APreconditioner, PiPreconditioner,
-        BasePreconditioner):
-    """ Preconditioner for SLDS
-    See individual Preconditioner Mixin for details
+class SLDSPreconditioner(BasePreconditioner):
+    """ SLDS Preconditioner
+    See individual Precondition Mixins for details
     """
-    pass
+    _precond_helper_list = [
+            TransitionMatrixPrecondHelper(name='pi', dim_names=['num_states']),
+            SquareMatricesPrecondHelper(name='A', dim_names=['n', 'num_states'],
+                var_row_name='Q'),
+            CovariancesPrecondHelper(name='Q', dim_names=['n', 'num_states']),
+            RectMatrixPrecondHelper(name='C', dim_names=['m', 'n'],
+                var_row_name='R'),
+            CovariancePrecondHelper(name='R', dim_names=['m']),
+            ]
 
 def generate_slds_data(T, parameters, initial_message = None,
         tqdm=None):
@@ -322,12 +343,13 @@ class SLDSHelper(SGMCMCHelper):
             raise ValueError("Requires x or z be passed to condition on")
 
     def _x_forward_messages(self, observations, z, parameters, forward_message,
-            weights=None, tqdm=None):
+            weights=None, tqdm=None, only_return_last=False):
         # Return list of forward messages Pr(x_{t} | y_{<=t}, z)
         # y is num_obs x m matrix
         num_obs = np.shape(observations)[0]
-        forward_messages = [None]*(num_obs+1)
-        forward_messages[0] = forward_message
+        if not only_return_last:
+            forward_messages = [None]*(num_obs+1)
+            forward_messages[0] = forward_message
 
         mean_precision = forward_message['x']['mean_precision']
         precision = forward_message['x']['precision']
@@ -388,7 +410,17 @@ class SLDSHelper(SGMCMCHelper):
             mean_precision = new_mean_precision
             precision = new_precision
             z_prev = z_cur
-            forward_messages[t+1] = dict(
+            if not only_return_last:
+                forward_messages[t+1] = dict(
+                        x={
+                            'mean_precision': mean_precision,
+                            'precision': precision,
+                            'log_constant': log_constant,
+                            },
+                        z_prev=z_prev,
+                    )
+        if only_return_last:
+            last_message = dict(
                     x={
                         'mean_precision': mean_precision,
                         'precision': precision,
@@ -396,15 +428,18 @@ class SLDSHelper(SGMCMCHelper):
                         },
                     z_prev=z_prev,
                 )
-        return forward_messages
+            return last_message
+        else:
+            return forward_messages
 
     def _x_backward_messages(self, observations, z, parameters, backward_message,
-            weights=None, tqdm=None):
+            weights=None, tqdm=None, only_return_last=False):
         # Return list of backward messages Pr(y_{>t} | x_t, z)
         # y is num_obs x n matrix
         num_obs = np.shape(observations)[0]
-        backward_messages = [None]*(num_obs+1)
-        backward_messages[-1] = backward_message
+        if not only_return_last:
+            backward_messages = [None]*(num_obs+1)
+            backward_messages[-1] = backward_message
 
         mean_precision = backward_message['x']['mean_precision']
         precision = backward_message['x']['precision']
@@ -461,13 +496,21 @@ class SLDSHelper(SGMCMCHelper):
             precision = new_precision
             z_next = z_cur
 
-            backward_messages[t] = dict(x={
+            if not only_return_last:
+                backward_messages[t] = dict(x={
+                    'mean_precision': mean_precision,
+                    'precision': precision,
+                    'log_constant': log_constant,
+                }, z_next=z_next)
+        if only_return_last:
+            last_message = dict(x={
                 'mean_precision': mean_precision,
                 'precision': precision,
                 'log_constant': log_constant,
             }, z_next=z_next)
-
-        return backward_messages
+            return last_message
+        else:
+            return backward_messages
 
     def _x_marginal_loglikelihood(self, observations, z, parameters,
             forward_message=None, backward_message=None, weights=None,
@@ -803,12 +846,13 @@ class SLDSHelper(SGMCMCHelper):
         return
 
     def _z_forward_messages(self, observations, x, parameters, forward_message,
-            weights=None, tqdm=None):
+            weights=None, tqdm=None, only_return_last=False):
         # Return list of forward messages Pr(z_{t}, y_{<=t}, x)
         # y is num_obs x m matrix
         num_obs = np.shape(observations)[0]
-        forward_messages = [None]*(num_obs+1)
-        forward_messages[0] = forward_message
+        if not only_return_last:
+            forward_messages = [None]*(num_obs+1)
+            forward_messages[0] = forward_message
 
         prob_vector = forward_message['z']['prob_vector']
         log_constant = forward_message['z']['log_constant']
@@ -849,22 +893,34 @@ class SLDSHelper(SGMCMCHelper):
 
             # Save Messages
             x_prev = x_cur
-            forward_messages[t+1] = dict(
+            if not only_return_last:
+                forward_messages[t+1] = dict(
+                        z={
+                            'prob_vector': prob_vector,
+                            'log_constant': log_constant,
+                            },
+                        x_prev=x_prev,
+                    )
+        if only_return_last:
+            last_message = dict(
                     z={
                         'prob_vector': prob_vector,
                         'log_constant': log_constant,
                         },
                     x_prev=x_prev,
                 )
-        return forward_messages
+            return last_message
+        else:
+            return forward_messages
 
     def _z_backward_messages(self, observations, x, parameters,
-            backward_message, weights=None, tqdm=None):
+            backward_message, weights=None, tqdm=None, only_return_last=False):
         # Return list of backward messages Pr(y_{>t} | x_t)
         # y is num_obs x n matrix
         num_obs = np.shape(observations)[0]
-        backward_messages = [None]*(num_obs+1)
-        backward_messages[-1] = backward_message
+        if not only_return_last:
+            backward_messages = [None]*(num_obs+1)
+            backward_messages[-1] = backward_message
 
         prob_vector = backward_message['z']['likelihood_vector']
         log_constant = backward_message['z']['log_constant']
@@ -885,7 +941,7 @@ class SLDSHelper(SGMCMCHelper):
 
             # Log Pr(Y_cur | X_cur )
             LRinvTymCx = np.dot(LRinv.T, y_cur - np.dot(C, x_cur))
-            log_constant = weight_t * (
+            log_constant += weight_t * (
                     -0.5 * self.m * np.log(2*np.pi) + \
                     -0.5*np.dot(LRinvTymCx, LRinvTymCx) + \
                     np.sum(np.log(np.diag(LRinv)))
@@ -908,12 +964,20 @@ class SLDSHelper(SGMCMCHelper):
 
             # Save Messages
             x_next = x_cur
-            backward_messages[t] = dict(z={
+            if not only_return_last:
+                backward_messages[t] = dict(z={
+                    'likelihood_vector': prob_vector,
+                    'log_constant': log_constant,
+                }, x_next=x_next)
+
+        if only_return_last:
+            last_message = dict(z={
                 'likelihood_vector': prob_vector,
                 'log_constant': log_constant,
             }, x_next=x_next)
-
-        return backward_messages
+            return last_message
+        else:
+            return backward_messages
 
     def _z_marginal_loglikelihood(self, observations, x, parameters,
             forward_message=None, backward_message=None, weights=None,
@@ -1363,17 +1427,29 @@ class SLDSHelper(SGMCMCHelper):
         S_curcur = PsiT.T.dot(PsiT)
 
         # Return sufficient Statistics
-        sufficient_stat = dict(
-                alpha_Pi=z_pair_count,
-                Sx_count=transition_count,
-                Sx_prevprev=Sx_prevprev,
-                Sx_curprev=Sx_curprev,
-                Sx_curcur=Sx_curcur,
+        sufficient_stat = {}
+        sufficient_stat['pi'] = dict(alpha = z_pair_count)
+        sufficient_stat['A'] = dict(
+                S_prevprev = Sx_prevprev,
+                S_curprev = Sx_curprev,
+                )
+        sufficient_stat['Q'] = dict(
+                S_count=transition_count,
+                S_prevprev = Sx_prevprev,
+                S_curprev = Sx_curprev,
+                S_curcur=Sx_curcur,
+                )
+        sufficient_stat['C'] = dict(
+                S_prevprev = S_prevprev,
+                S_curprev = S_curprev,
+                )
+        sufficient_stat['R'] = dict(
                 S_count=emission_count,
-                S_prevprev=S_prevprev,
-                S_curprev=S_curprev,
+                S_prevprev = S_prevprev,
+                S_curprev = S_curprev,
                 S_curcur=S_curcur,
                 )
+
         return sufficient_stat
 
 def x_marginal_loglikelihood_helper(forward_message, backward_message,

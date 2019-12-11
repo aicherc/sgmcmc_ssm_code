@@ -250,31 +250,51 @@ for _ in range(5):
 
 ## Example SGRLD Step
 sampler.parameters = sampler.prior.sample_prior()
+sampler.parameters.pi_type = 'expanded'
 print(sampler.parameters)
 for _ in range(5):
     print(sampler.sample_sgrld(epsilon=0.1, preconditioner=preconditioner).project_parameters())
 
 
 ## Using Evaluator
+from tqdm import tqdm
 from sgmcmc_ssm import SamplerEvaluator
 from sgmcmc_ssm.metric_functions import (
         sample_function_parameters,
         noisy_logjoint_loglike_metric,
         metric_function_parameters,
+        best_permutation_metric_function_parameter,
+        best_double_permutation_metric_function_parameter,
         )
-
 metric_functions = [
         noisy_logjoint_loglike_metric(),
+        best_double_permutation_metric_function_parameter(
+            parameter_name = 'pi',
+            target_value = parameters.pi,
+            metric_name = 'mse',
+            best_function = min
+            ),
+        best_permutation_metric_function_parameter(
+            parameter_name = 'A',
+            target_value = parameters.A,
+            metric_name = 'mse',
+            best_function = min
+            ),
+        best_permutation_metric_function_parameter(
+            parameter_name = 'Q',
+            target_value = parameters.Q,
+            metric_name = 'mse',
+            best_function = min
+            ),
         metric_function_parameters(
-                parameter_names=['A', 'Q', 'C', 'R'],
-                target_values=[parameters.A, parameters.Q,
-                    parameters.C, parameters.R],
-                metric_names = ['mse', 'mse', 'mse', 'mse'],
+                parameter_names=['C', 'R'],
+                target_values=[parameters.C, parameters.R],
+                metric_names = ['mse', 'mse'],
                 )
         ]
 
 sample_functions = sample_function_parameters(
-        ['A', 'Q', 'LQinv', 'C', 'R', 'LRinv'],
+        ['pi', 'A', 'Q', 'C', 'R'],
         )
 
 sampler = SLDSSampler(**parameters.dim)
@@ -289,13 +309,13 @@ print(evaluator.metrics)
 print(evaluator.samples)
 
 ## Run a few Gibbs Sampler steps
-for _ in range(10):
+for _ in tqdm(range(10)):
     evaluator.evaluate_sampler_step(['sample_gibbs', 'project_parameters'])
 print(evaluator.metrics)
 print(evaluator.samples)
 
 ## Run a few ADA_GRAD sampler steps
-for _ in range(10):
+for _ in tqdm(range(10)):
     evaluator.evaluate_sampler_step(
             ['step_adagrad', 'project_parameters'],
             [dict(epsilon=0.1, subsequence_length=10, buffer_length=5), {}],
@@ -305,7 +325,8 @@ print(evaluator.samples)
 
 
 ## Run a few SGRLD Steps
-for _ in range(10):
+evaluator.parameters.pi_type='expanded'
+for _ in tqdm(range(10)):
     evaluator.evaluate_sampler_step(
             ['sample_sgrld', 'project_parameters'],
             [dict(preconditioner=preconditioner,

@@ -120,6 +120,7 @@ print(helper.latent_var_sample(data['observations'], parameters, distribution="p
 
 ## Distribution of observations
 ymean, ysd = helper.y_marginal(data['observations'], parameters, distribution="smoothed")
+plt.figure()
 plt.plot(data['observations'][:,0], 'C0')
 plt.plot(ymean[:,0], 'C1--')
 plt.fill_between(
@@ -130,6 +131,7 @@ plt.fill_between(
 
 # Gaussian HMM Preconditioner
 preconditioner = GaussHMMPreconditioner()
+parameters.pi_type = 'expanded' # Use 'expanded' pi_type for preconditioning
 grad = helper.gradient_marginal_loglikelihood(data['observations'], parameters)
 ## Precondition Gradient
 print(grad)
@@ -189,6 +191,7 @@ for _ in range(5):
 
 ## Example SGRLD Step
 sampler.parameters = sampler.prior.sample_prior()
+sampler.parameters.pi_type = 'expanded' # Use 'expanded' parameterization for preconditioning
 print(sampler.parameters)
 for _ in range(5):
     print(sampler.sample_sgrld(epsilon=0.1, preconditioner=preconditioner).project_parameters())
@@ -255,7 +258,8 @@ print(evaluator.samples)
 
 
 ## Run a few SGRLD Steps
-for _ in range(10):
+evaluator.sampler.parameters.pi_type = 'expanded'
+for _ in range(100):
     evaluator.evaluate_sampler_step(
             ['sample_sgrld', 'project_parameters'],
             [dict(preconditioner=preconditioner,

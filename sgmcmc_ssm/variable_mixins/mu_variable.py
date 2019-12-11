@@ -156,7 +156,7 @@ class MuPrior(object):
                 mean_mu, var_col_mu, parameters.LRinv):
             logprior += normal_logpdf(mu_k,
                     mean=mean_mu_k,
-                    Lprec=var_col_mu_k**0.5 * LRinv_k,
+                    Lprec=var_col_mu_k**-0.5 * LRinv_k,
                     )
 
         logprior = super()._logprior(logprior, parameters, **kwargs)

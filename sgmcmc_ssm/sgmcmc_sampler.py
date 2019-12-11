@@ -953,24 +953,22 @@ class SGMCMCHelper(object):
         raise NotImplementedError()
 
     def _forward_messages(self, observations, parameters, forward_message,
-            **kwargs):
+            weights=None, only_return_last=False, **kwargs):
         raise NotImplementedError()
 
     def _backward_messages(self, observations, parameters, backward_message,
-            **kwargs):
+            weights=None, only_return_last=False, **kwargs):
         raise NotImplementedError()
 
     def _forward_message(self, observations, parameters, forward_message,
             **kwargs):
-        # Override for memory savings
         return self._forward_messages(observations, parameters, forward_message,
-                **kwargs)[-1]
+                only_return_last=True, **kwargs)
 
     def _backward_message(self, observations, parameters, backward_message,
             **kwargs):
-        # Override for memory savings
         return self._backward_messages(observations, parameters,
-                backward_message, **kwargs)[0]
+                backward_message, only_return_last=True, **kwargs)
 
     def pf_score_estimate(self, observations, parameters, weights,
             subsequence_start=0, subsequence_end=None,

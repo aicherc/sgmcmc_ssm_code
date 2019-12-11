@@ -2,14 +2,14 @@ import numpy as np
 import logging
 logger = logging.getLogger(name=__name__)
 
-from ..base_parameter import (
-        BaseParameters, BasePrior, BasePreconditioner,
+from ..base_parameters import (
+        BaseParameters, BasePrior,
         )
-from ..variable_mixins import (
-        RSingleMixin, RSinglePrior,
+from ..variables import (
+        CovarianceParamHelper, CovariancePriorHelper,
         )
-from ..variable_mixins.garch_variable import (
-        GARCHMixin, GARCHMixinPrior,
+from ..variables.garch_var import (
+        GARCHParamHelper, GARCHPriorHelper,
         )
 from ..sgmcmc_sampler import (
         SGMCMCSampler,
@@ -27,34 +27,62 @@ from ..particle_filters.buffered_smoother import (
         buffered_pf_wrapper,
         average_statistic,
         )
-class GARCHParameters(RSingleMixin, GARCHMixin,
-        BaseParameters):
+from scipy.special import logit
+
+class GARCHParameters(BaseParameters):
     """ GARCH Parameters """
+    _param_helper_list = [
+            GARCHParamHelper(),
+            CovarianceParamHelper(name='R', dim_names=['m']),
+            ]
+    for param_helper in _param_helper_list:
+        properties = param_helper.get_properties()
+        for name, prop in properties.items():
+            vars()[name] = prop
+
     def __str__(self):
         my_str = "GARCHParameters:"
-        my_str += "\nalpha:\n" + str(self.alpha)
-        my_str += "\nbeta:\n" + str(self.beta)
-        my_str += "\ngamma:\n" + str(self.gamma)
-        my_str += "\ntau:\n" + str(self.tau)
+        my_str +="\nalpha:{0}, beta:{1}, gamma:{2}, tau:{3}\n".format(
+                np.around(np.asscalar(self.alpha), 6),
+                np.around(np.asscalar(self.beta), 6),
+                np.around(np.asscalar(self.gamma), 6),
+                np.around(np.asscalar(self.tau), 6))
         return my_str
 
     @property
     def tau(self):
-        tau = self.var_dict['LRinv'] ** -1
+        if self.m == 1:
+            tau = self.var_dict['LRinv'] ** -1
+        else:
+            tau = np.linalg.inv(self.var_dict['LRinv'].T)
         return tau
 
-    @property
-    def n(self):
-        return 1
+    @staticmethod
+    def convert_alpha_beta_gamma(alpha, beta, gamma):
+        """ Convert alpha, beta, gamma to log_mu, logit_phi, logit_lambduh
 
-class GARCHPrior(RSinglePrior, GARCHMixinPrior,
-        BasePrior):
+        mu = alpha / (1- beta - gamma)
+        phi = beta + gamma
+        lambda = beta / (beta + gamma)
+        """
+        if alpha <= 0 or beta <= 0 or gamma <= 0:
+            raise ValueError("Cannot have alpha, beta, or gamma <= 0")
+        if beta + gamma >=1:
+            raise ValueError("Cannot have beta + gamma >- 1")
+        log_mu = np.log(alpha/(1 - beta - gamma))
+        logit_phi = logit(beta + gamma)
+        logit_lambduh = logit(beta/(beta + gamma))
+        return log_mu, logit_phi, logit_lambduh
+
+class GARCHPrior(BasePrior):
     """ GARCH Prior
     See individual Prior Mixins for details
     """
-    @staticmethod
-    def _parameters(**kwargs):
-        return GARCHParameters(**kwargs)
+    _Parameters = GARCHParameters
+    _prior_helper_list = [
+            GARCHPriorHelper(),
+            CovariancePriorHelper(name='R', dim_names=['m']),
+            ]
 
 def generate_garch_data(T, parameters, initial_message = None,
         tqdm=None):
@@ -80,7 +108,7 @@ def generate_garch_data(T, parameters, initial_message = None,
     R = parameters.R
 
     if initial_message is None:
-        init_precision =  np.array([[(1 - beta - gamma)/alpha]])
+        init_precision =  np.atleast_2d((1 - beta - gamma)/alpha)
         initial_message = {
                 'log_constant': 0.0,
                 'mean_precision': np.zeros(n),
@@ -206,8 +234,8 @@ def garch_sufficient_statistics(x_t, x_next, y_next, **kwargs):
     """ GARCH Sufficient Statistics
 
     h[0] = sum(x_{t+1})
-    h[1] = sum(x_{t+1} x_{t+1}^T)
-    h[2] = sum(x_t x_{t+1})
+    h[1] = sum(x_{t+1}**2)
+    h[2] = sum(x_{t+1}**4)
 
     Args:
         x_t (N by n ndarray): particles for x_t
@@ -217,7 +245,7 @@ def garch_sufficient_statistics(x_t, x_next, y_next, **kwargs):
         h (N by p ndarray): sufficient statistic
     """
     N = np.shape(x_t)[0]
-    h = np.array([x_next[:,0], x_next[:,0]**2, x_t[:,0]*x_next[:,0]]).T
+    h = np.array([x_next[:,0], x_next[:,0]**2, x_next[:,0]**4]).T
     return h
 
 class GARCHHelper(SGMCMCHelper):
@@ -498,6 +526,7 @@ class GARCHHelper(SGMCMCHelper):
     def pf_latent_var_marginal(self, observations, parameters,
             subsequence_start=0, subsequence_end=None, weights=None,
             pf="poyiadjis_N", N=100, kernel=None,
+            squared=False,
             **kwargs):
         # Set kernel
         Kernel = self._get_kernel(kernel)
@@ -523,8 +552,12 @@ class GARCHHelper(SGMCMCHelper):
                 )
         avg_statistic = average_statistic(out)
         avg_statistic = np.reshape(avg_statistic, (-1, 3))
-        x_mean = avg_statistic[:, 0]
-        x_cov = avg_statistic[:, 1] - x_mean**2
+        if not squared:
+            x_mean = avg_statistic[:, 0]
+            x_cov = avg_statistic[:, 1] - x_mean**2
+        else:
+            x_mean = avg_statistic[:, 1]
+            x_cov = avg_statistic[:, 2] - x_mean**2
 
         x_mean = np.reshape(x_mean, (x_mean.shape[0], 1))
         x_cov = np.reshape(x_cov, (x_cov.shape[0], 1, 1))

@@ -2,13 +2,16 @@ import numpy as np
 import logging
 logger = logging.getLogger(name=__name__)
 
-from ..base_parameter import (
+from ..base_parameters import (
         BaseParameters, BasePrior, BasePreconditioner,
         )
-from ..variable_mixins import (
-        ASingleMixin, ASinglePrior, ASinglePreconditioner,
-        QSingleMixin, QSinglePrior, QSinglePreconditioner,
-        RSingleMixin, RSinglePrior, RSinglePreconditioner,
+from ..variables import (
+        SquareMatrixParamHelper, SquareMatrixPriorHelper,
+        SquareMatrixPrecondHelper,
+        RectMatrixParamHelper, RectMatrixPriorHelper,
+        RectMatrixPrecondHelper,
+        CovarianceParamHelper, CovariancePriorHelper,
+        CovariancePrecondHelper,
         )
 from ..sgmcmc_sampler import (
         SGMCMCSampler,
@@ -31,16 +34,28 @@ from sgmcmc_ssm.particle_filters.pf import (
         )
 
 
-class SVMParameters(RSingleMixin, QSingleMixin, ASingleMixin,
-        BaseParameters):
+class SVMParameters(BaseParameters):
     """ SVM Parameters """
+    _param_helper_list = [
+            SquareMatrixParamHelper(name='A', dim_names=['n']),
+            CovarianceParamHelper(name='Q', dim_names=['n']),
+            CovarianceParamHelper(name='R', dim_names=['m']),
+            ]
+    for param_helper in _param_helper_list:
+        properties = param_helper.get_properties()
+        for name, prop in properties.items():
+            vars()[name] = prop
+
     def __str__(self):
         my_str = "SVMParameters:"
-        my_str += "\nA:\n" + str(self.A)
-        my_str += "\nQ:\n" + str(self.Q)
-        my_str += "\nR:\n" + str(self.R)
+        if self.n == 1:
+            my_str +="\nA:{0}, Q:{1}, R:{2}\n".format(
+                    self.A[0,0], self.Q[0,0], self.R[0,0])
+        else:
+            my_str += "\nA:\n" + str(self.A)
+            my_str += "\nQ:\n" + str(self.Q)
+            my_str += "\nR:\n" + str(self.R)
         return my_str
-
 
     @property
     def phi(self):
@@ -63,22 +78,59 @@ class SVMParameters(RSingleMixin, QSingleMixin, ASingleMixin,
             tau = np.linalg.inv(self.var_dict['LRinv'].T)
         return tau
 
-
-class SVMPrior(RSinglePrior, QSinglePrior, ASinglePrior,
-        BasePrior):
+class SVMPrior(BasePrior):
     """ SVM Prior
     See individual Prior Mixins for details
     """
-    @staticmethod
-    def _parameters(**kwargs):
-        return SVMParameters(**kwargs)
+    _Parameters = SVMParameters
+    _prior_helper_list = [
+            CovariancePriorHelper(name='Q', dim_names=['n'], matrix_name='A'),
+            CovariancePriorHelper(name='R', dim_names=['m']),
+            SquareMatrixPriorHelper(name='A', dim_names=['n'],
+                var_row_name='Q'),
+            ]
 
-#class SVMPreconditioner(RSinglePreconditioner, QSinglePreconditioner,
-#        ASinglePreconditioner, BasePreconditioner):
-#    """ Preconditioner for SVM
-#    See individual Preconditioner Mixin for details
+
+#class SVMParameters(RSingleMixin, QSingleMixin, ASingleMixin,
+#        BaseParameters):
+#    """ SVM Parameters """
+#    def __str__(self):
+#        my_str = "SVMParameters:"
+#        my_str += "\nA:\n" + str(self.A)
+#        my_str += "\nQ:\n" + str(self.Q)
+#        my_str += "\nR:\n" + str(self.R)
+#        return my_str
+#
+#
+#    @property
+#    def phi(self):
+#        phi = self.var_dict['A']
+#        return phi
+#
+#    @property
+#    def sigma(self):
+#        if self.n == 1:
+#            sigma = self.var_dict['LQinv'] ** -1
+#        else:
+#            sigma = np.linalg.inv(self.var_dict['LQinv'].T)
+#        return sigma
+#
+#    @property
+#    def tau(self):
+#        if self.m == 1:
+#            tau = self.var_dict['LRinv'] ** -1
+#        else:
+#            tau = np.linalg.inv(self.var_dict['LRinv'].T)
+#        return tau
+#
+#class SVMPrior(RSinglePrior, QSinglePrior, ASinglePrior,
+#        BasePrior):
+#    """ SVM Prior
+#    See individual Prior Mixins for details
 #    """
-#    pass
+#    @staticmethod
+#    def _parameters(**kwargs):
+#        return SVMParameters(**kwargs)
 
 def generate_svm_data(T, parameters, initial_message = None,
         tqdm=None):
@@ -278,11 +330,11 @@ class SVMHelper(SGMCMCHelper):
         return
 
     def _forward_messages(self, observations, parameters, forward_message,
-            weights=None, tqdm=None):
+            weights=None, tqdm=None, **kwargs):
         raise NotImplementedError('SVM does not have analytic message passing')
 
     def _backward_messages(self, observations, parameters, backward_message,
-            weights=None, tqdm=None):
+            weights=None, tqdm=None, **kwargs):
         raise NotImplementedError('SVM does not have analytic message passing')
 
     def latent_var_sample(self, observations, parameters,

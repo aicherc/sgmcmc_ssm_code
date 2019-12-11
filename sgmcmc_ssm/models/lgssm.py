@@ -2,15 +2,18 @@ import numpy as np
 import logging
 logger = logging.getLogger(name=__name__)
 
-from ..base_parameter import (
+from ..base_parameters import (
         BaseParameters, BasePrior, BasePreconditioner,
         )
-from ..variable_mixins import (
-        ASingleMixin, ASinglePrior, ASinglePreconditioner,
-        CSingleMixin, CSinglePrior, CSinglePreconditioner,
-        QSingleMixin, QSinglePrior, QSinglePreconditioner,
-        RSingleMixin, RSinglePrior, RSinglePreconditioner,
+from ..variables import (
+        SquareMatrixParamHelper, SquareMatrixPriorHelper,
+        SquareMatrixPrecondHelper,
+        RectMatrixParamHelper, RectMatrixPriorHelper,
+        RectMatrixPrecondHelper,
+        CovarianceParamHelper, CovariancePriorHelper,
+        CovariancePrecondHelper,
         )
+
 from ..sgmcmc_sampler import (
         SGMCMCSampler,
         SGMCMCHelper,
@@ -34,9 +37,19 @@ from .._utils import (
         lower_tri_mat_inv,
         )
 
-class LGSSMParameters(RSingleMixin, QSingleMixin, CSingleMixin, ASingleMixin,
-        BaseParameters):
+class LGSSMParameters(BaseParameters):
     """ LGSSM Parameters """
+    _param_helper_list = [
+            SquareMatrixParamHelper(name='A', dim_names=['n']),
+            RectMatrixParamHelper(name='C', dim_names=['m', 'n']),
+            CovarianceParamHelper(name='Q', dim_names=['n']),
+            CovarianceParamHelper(name='R', dim_names=['m']),
+            ]
+    for param_helper in _param_helper_list:
+        properties = param_helper.get_properties()
+        for name, prop in properties.items():
+            vars()[name] = prop
+
     def __str__(self):
         my_str = "LGSSMParameters:"
         my_str += "\nA:\n" + str(self.A)
@@ -45,50 +58,30 @@ class LGSSMParameters(RSingleMixin, QSingleMixin, CSingleMixin, ASingleMixin,
         my_str += "\nR:\n" + str(self.R)
         return my_str
 
-    def project_parameters(self, **kwargs):
-        if kwargs.get('fix_C', True):
-            k = min(self.n, self.m)
-            C = self.C
-            C[0:k, 0:k] = np.eye(k)
-            self.C = C
-        return super().project_parameters(**kwargs)
-
-    @property
-    def phi(self):
-        phi = self.var_dict['A']
-        return phi
-
-    @property
-    def sigma(self):
-        if self.n == 1:
-            sigma = self.var_dict['LQinv'] ** -1
-        else:
-            sigma = np.linalg.inv(self.var_dict['LQinv'].T)
-        return sigma
-
-    @property
-    def tau(self):
-        if self.m == 1:
-            tau = self.var_dict['LRinv'] ** -1
-        else:
-            tau = np.linalg.inv(self.var_dict['LRinv'].T)
-        return tau
-
-class LGSSMPrior(RSinglePrior, QSinglePrior, CSinglePrior, ASinglePrior,
-        BasePrior):
+class LGSSMPrior(BasePrior):
     """ LGSSM Prior
     See individual Prior Mixins for details
     """
-    @staticmethod
-    def _parameters(**kwargs):
-        return LGSSMParameters(**kwargs)
+    _Parameters = LGSSMParameters
+    _prior_helper_list = [
+            CovariancePriorHelper(name='Q', dim_names=['n'], matrix_name='A'),
+            CovariancePriorHelper(name='R', dim_names=['m'], matrix_name='C'),
+            SquareMatrixPriorHelper(name='A', dim_names=['n'],
+                var_row_name='Q'),
+            RectMatrixPriorHelper(name='C', dim_names=['m', 'n'],
+                var_row_name='R'),
+            ]
 
-class LGSSMPreconditioner(RSinglePreconditioner, QSinglePreconditioner,
-        CSinglePreconditioner, ASinglePreconditioner, BasePreconditioner):
-    """ Preconditioner for LGSSM
-    See individual Preconditioner Mixin for details
+class LGSSMPreconditioner(BasePreconditioner):
+    """ LGSSM Preconditioner
+    See individual Precondition Mixins for details
     """
-    pass
+    _precond_helper_list = [
+            SquareMatrixPrecondHelper(name='A', dim_names=['n'], var_row_name='Q'),
+            RectMatrixPrecondHelper(name='C', dim_names=['m', 'n'], var_row_name='R'),
+            CovariancePrecondHelper(name='Q', dim_names=['n']),
+            CovariancePrecondHelper(name='R', dim_names=['m']),
+            ]
 
 def generate_lgssm_data(T, parameters, initial_message = None,
         tqdm=None):
@@ -188,12 +181,13 @@ class LGSSMHelper(SGMCMCHelper):
         return
 
     def _forward_messages(self, observations, parameters, forward_message,
-            weights=None, tqdm=None):
+            weights=None, tqdm=None, only_return_last=False):
         # Return list of forward messages Pr(x_{t} | y_{<=t})
         # y is num_obs x m matrix
         num_obs = np.shape(observations)[0]
-        forward_messages = [None]*(num_obs+1)
-        forward_messages[0] = forward_message
+        if not only_return_last:
+            forward_messages = [None]*(num_obs+1)
+            forward_messages[0] = forward_message
 
         mean_precision = forward_message['mean_precision']
         precision = forward_message['precision']
@@ -241,20 +235,30 @@ class LGSSMHelper(SGMCMCHelper):
             # Save Messages
             mean_precision = new_mean_precision
             precision = new_precision
-            forward_messages[t+1] = {
-                'mean_precision': mean_precision,
-                'precision': precision,
-                'log_constant': log_constant,
-            }
-        return forward_messages
+            if not only_return_last:
+                forward_messages[t+1] = {
+                    'mean_precision': mean_precision,
+                    'precision': precision,
+                    'log_constant': log_constant,
+                }
+        if only_return_last:
+            last_message = {
+                    'mean_precision': mean_precision,
+                    'precision': precision,
+                    'log_constant': log_constant,
+                }
+            return last_message
+        else:
+            return forward_messages
 
     def _backward_messages(self, observations, parameters, backward_message,
-            weights=None, tqdm=None):
+            weights=None, tqdm=None, only_return_last=False):
         # Return list of backward messages Pr(y_{>t} | x_t)
         # y is num_obs x n matrix
         num_obs = np.shape(observations)[0]
-        backward_messages = [None]*(num_obs+1)
-        backward_messages[-1] = backward_message
+        if not only_return_last:
+            backward_messages = [None]*(num_obs+1)
+            backward_messages[-1] = backward_message
 
         mean_precision = backward_message['mean_precision']
         precision = backward_message['precision']
@@ -301,13 +305,21 @@ class LGSSMHelper(SGMCMCHelper):
             mean_precision = new_mean_precision
             precision = new_precision
 
-            backward_messages[t] = {
-                'mean_precision': mean_precision,
-                'precision': precision,
-                'log_constant': log_constant,
-            }
-
-        return backward_messages
+            if not only_return_last:
+                backward_messages[t] = {
+                    'mean_precision': mean_precision,
+                    'precision': precision,
+                    'log_constant': log_constant,
+                }
+        if only_return_last:
+            last_message = {
+                    'mean_precision': mean_precision,
+                    'precision': precision,
+                    'log_constant': log_constant,
+                }
+            return last_message
+        else:
+            return backward_messages
 
     def marginal_loglikelihood(self, observations, parameters,
             forward_message=None, backward_message=None, weights=None,
@@ -731,15 +743,26 @@ class LGSSMHelper(SGMCMCHelper):
         S_curcur = PsiT.T.dot(PsiT)
 
         # Return sufficient Statistics
-        sufficient_stat = dict(
-                Sx_count=transition_count,
-                Sx_prevprev=Sx_prevprev,
-                Sx_curprev=Sx_curprev,
-                Sx_curcur=Sx_curcur,
+        sufficient_stat = {}
+        sufficient_stat['A'] = dict(
+                S_prevprev=Sx_prevprev,
+                S_curprev=Sx_curprev,
+                )
+        sufficient_stat['Q'] = dict(
+                S_count=transition_count,
+                S_prevprev=Sx_prevprev,
+                S_curprev=Sx_curprev,
+                S_curcur=Sx_curcur,
+                )
+        sufficient_stat['R'] = dict(
                 S_count=emission_count,
                 S_prevprev=S_prevprev,
                 S_curprev=S_curprev,
                 S_curcur=S_curcur,
+                )
+        sufficient_stat['C'] = dict(
+                S_prevprev=S_prevprev,
+                S_curprev=S_curprev,
                 )
         return sufficient_stat
 

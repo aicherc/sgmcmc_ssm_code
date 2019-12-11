@@ -2,13 +2,16 @@ import numpy as np
 import logging
 logger = logging.getLogger(name=__name__)
 
-from ..base_parameter import (
+from ..base_parameters import (
         BaseParameters, BasePrior, BasePreconditioner,
         )
-from ..variable_mixins import (
-        PiMixin, PiPrior, PiPreconditioner,
-        MuMixin, MuPrior, MuPreconditioner,
-        RMixin, RPrior, RPreconditioner,
+from ..variables import (
+        TransitionMatrixParamHelper, TransitionMatrixPriorHelper,
+        TransitionMatrixPrecondHelper,
+        VectorsParamHelper, VectorsPriorHelper,
+        VectorsPrecondHelper,
+        CovariancesParamHelper, CovariancesPriorHelper,
+        CovariancesPrecondHelper,
         )
 from ..sgmcmc_sampler import (
         SGMCMCSampler,
@@ -18,35 +21,46 @@ from .._utils import (
         random_categorical,
         )
 
-class GaussHMMParameters(PiMixin, RMixin, MuMixin,
-        BaseParameters):
+class GaussHMMParameters(BaseParameters):
     """ Gaussian HMM Parameters """
+    _param_helper_list = [
+            TransitionMatrixParamHelper(name='pi', dim_names=['num_states', 'pi_type']),
+            VectorsParamHelper(name='mu', dim_names=['m', 'num_states']),
+            CovariancesParamHelper(name='R', dim_names=['m', 'num_states']),
+            ]
+    for param_helper in _param_helper_list:
+        properties = param_helper.get_properties()
+        for name, prop in properties.items():
+            vars()[name] = prop
+
     def __str__(self):
         my_str = "GaussHMMParameters:"
         my_str += "\npi:\n" + str(self.pi)
-        my_str += "\npi_type: `" + str(self.pi_type) + "`"
         my_str += "\nmu:\n" + str(self.mu)
         my_str += "\nR:\n" + str(self.R)
         return my_str
 
-class GaussHMMPrior(PiPrior, RPrior, MuPrior, BasePrior):
-    """ GAUSSHMM Prior for (Pi, mu, Rinv)
-
-    The prior for Pi_k is Dirichlet
-    The prior for mu_k is Gaussian (mean, cov \propto to Q)
-    The prior for Rinv_k is Wishart
-
+class GaussHMMPrior(BasePrior):
+    """ Gaussian HMM Prior
+    See individual Prior Mixins for details
     """
-    @staticmethod
-    def _parameters(**kwargs):
-        return GaussHMMParameters(**kwargs)
+    _Parameters = GaussHMMParameters
+    _prior_helper_list = [
+            CovariancesPriorHelper(name='R', dim_names=['m', 'num_states'], matrix_name='mu'),
+            TransitionMatrixPriorHelper(name='pi', dim_names=['num_states']),
+            VectorsPriorHelper(name='mu', dim_names=['m', 'num_states'],
+                var_row_name='R'),
+            ]
 
-class GaussHMMPreconditioner(PiPreconditioner, RPreconditioner,
-        MuPreconditioner, BasePreconditioner):
-    """ Preconditioner for GaussHMM
-    See individual Preconditioner Mixin for details
+class GaussHMMPreconditioner(BasePreconditioner):
+    """ Gaussian HMM Preconditioner
+    See individual Precondition Mixins for details
     """
-    pass
+    _precond_helper_list = [
+            TransitionMatrixPrecondHelper(name='pi', dim_names=['num_states']),
+            VectorsPrecondHelper(name='mu', dim_names=['m', 'num_states'], var_row_name='R'),
+            CovariancesPrecondHelper(name='R', dim_names=['m', 'num_states']),
+            ]
 
 def generate_gausshmm_data(T, parameters, initial_message = None,
         tqdm=None):
@@ -127,12 +141,13 @@ class HMMHelper(SGMCMCHelper):
         return
 
     def _forward_messages(self, observations, parameters, forward_message,
-            weights=None, tqdm=None):
+            weights=None, tqdm=None, only_return_last=False):
         # Return list of forward messages
         # y is num_obs x m matrix
         num_obs = np.shape(observations)[0]
-        forward_messages = [None]*(num_obs+1)
-        forward_messages[0] = forward_message
+        if not only_return_last:
+            forward_messages = [None]*(num_obs+1)
+            forward_messages[0] = forward_message
 
         Pi = parameters.pi
         prob_vector = forward_message['prob_vector']
@@ -151,19 +166,28 @@ class HMMHelper(SGMCMCHelper):
             log_constant += weight_t * (log_t + np.log(np.sum(prob_vector)))
             prob_vector = prob_vector/np.sum(prob_vector)
 
-            forward_messages[t+1] = {
-                'prob_vector': prob_vector,
-                'log_constant': log_constant,
-            }
-        return forward_messages
+            if not only_return_last:
+                forward_messages[t+1] = {
+                    'prob_vector': prob_vector,
+                    'log_constant': log_constant,
+                }
+        if only_return_last:
+            last_message = {
+                    'prob_vector': prob_vector,
+                    'log_constant': log_constant,
+                }
+            return last_message
+        else:
+            return forward_messages
 
     def _backward_messages(self, observations, parameters, backward_message,
-            weights=None, tqdm=None):
+            weights=None, tqdm=None, only_return_last=False):
         # Return list of backward messages
         # y is num_obs x m matrix
         num_obs = np.shape(observations)[0]
-        backward_messages = [None]*(num_obs+1)
-        backward_messages[-1] = backward_message
+        if not only_return_last:
+            backward_messages = [None]*(num_obs+1)
+            backward_messages[-1] = backward_message
 
         Pi = parameters.pi
         prob_vector = backward_message['likelihood_vector']
@@ -172,7 +196,7 @@ class HMMHelper(SGMCMCHelper):
 
         pbar = reversed(range(num_obs))
         if tqdm is not None:
-            pbar = tqdm(pbar)
+            pbar = tqdm(pbar, total=num_obs)
             pbar.set_description("backward messages")
         for t in pbar:
             y_cur = observations[t]
@@ -183,12 +207,19 @@ class HMMHelper(SGMCMCHelper):
             prob_vector = np.dot(Pi, prob_vector)
             log_constant += weight_t * (log_t + np.log(np.sum(prob_vector)))
             prob_vector = prob_vector/np.sum(prob_vector)
-            backward_messages[t] = {
+            if not only_return_last:
+                backward_messages[t] = {
+                    'likelihood_vector': prob_vector,
+                    'log_constant': log_constant,
+                }
+        if only_return_last:
+            last_message = {
                 'likelihood_vector': prob_vector,
                 'log_constant': log_constant,
             }
-
-        return backward_messages
+            return last_message
+        else:
+            return backward_messages
 
     def marginal_loglikelihood(self, observations, parameters,
             forward_message=None, backward_message=None, weights=None,
@@ -286,7 +317,7 @@ class HMMHelper(SGMCMCHelper):
             # Forward Sampler
             pbar = enumerate(backward_messages)
             if tqdm is not None:
-                pbar = tqdm(pbar)
+                pbar = tqdm(pbar, total=len(backward_messages))
                 pbar.set_description("forward smoothed sampling z")
             for t, backward_t in pbar:
                 y_cur = observations[t]
@@ -343,6 +374,74 @@ class HMMHelper(SGMCMCHelper):
             raise ValueError("Unrecognized distr {0}".format(distr))
 
         return z
+
+    def latent_var_marginal(self, observations, parameters,
+           forward_message=None, backward_message=None,
+           distribution='smoothed', tqdm=None):
+        """ Calculate latent var marginal distribution
+
+        Backward pass + forward sampler for HMM
+
+        Args:
+            observations (ndarray): observations
+            parameters (parameters): parameters
+            forward_message (dict): alpha message
+                (e.g. Pr(z_{-1} | y_{-inf:-1}))
+                'log_constant' (double) log scaling constant
+                'prob_vector' (ndarray) dimension num_states
+                'y_prev' (ndarray) observation, optional
+            backward_message (dict): beta message
+                (e.g. Pr(y_{T:inf} | z_{T-1}))
+                'log_constant' (double) log scaling constant
+                'likelihood_vector' (ndarray) dimension num_states
+                'y_next' (ndarray) observation, optional
+            distribution (string): 'smoothed', 'filtered', 'predict'
+
+        Returns
+            z_prob (ndarray): num_obs by K marginal posterior for z
+        """
+        if forward_message is None:
+            forward_message = self.default_forward_message
+        if backward_message is None:
+            backward_message = self.default_backward_message
+
+        L = np.shape(observations)[0]
+        Pi = parameters.pi
+        z_prob = np.zeros((L, parameters.num_states), dtype=float)
+
+        if distribution == 'smoothed':
+            forward_messages = self.forward_pass(
+                    observations=observations,
+                    parameters=parameters,
+                    forward_message=forward_message,
+                    tqdm=tqdm
+                    )
+            backward_messages = self.backward_pass(
+                observations=observations,
+                    parameters=parameters,
+                    backward_message=backward_message,
+                    tqdm=tqdm
+                    )
+
+            pbar = range(L)
+            if tqdm is not None:
+                pbar = tqdm(pbar, total=L)
+                pbar.set_description("Marginalization")
+            for t in pbar:
+                log_prob_t = (np.log(forward_messages[t]['prob_vector']) + \
+                              np.log(backward_messages[t]['likelihood_vector']))
+                log_prob_t -= np.max(log_prob_t)
+                z_prob[t] = np.exp(log_prob_t)/np.sum(np.exp(log_prob_t))
+
+        elif distribution == 'filtered':
+            raise NotImplementedError()
+
+        elif distribution == 'predictive':
+            raise NotImplementedError()
+        else:
+            raise ValueError("Unrecognized distr {0}".format(distr))
+
+        return z_prob
 
     def y_marginal(self, observations, parameters,
             forward_message=None, backward_message=None,
@@ -460,11 +559,13 @@ class GaussHMMHelper(HMMHelper):
             yy_curcur[k] = np.dot(yk.T, yk)
 
         # Return sufficient Statistics
-        sufficient_stat = dict(
-                alpha_Pi=z_pair_count,
+        sufficient_stat = {}
+        sufficient_stat['pi'] = dict(alpha = z_pair_count)
+        sufficient_stat['mu'] = dict(S_prevprev = S_count, S_curprev = y_sum)
+        sufficient_stat['R'] = dict(
                 S_count=S_count,
-                S_prevprev=S_count,
-                S_curprev=y_sum,
+                S_prevprev = S_count,
+                S_curprev = y_sum,
                 S_curcur=yy_curcur,
                 )
         return sufficient_stat
@@ -702,6 +803,23 @@ class GaussHMMSampler(SGMCMCSampler):
                 tqdm=tqdm,
                 )
         return z
+
+    def calc_z_prob(self, parameters=None, observations=None, tqdm=None, **kwargs
+        """ Calculate Posterior Marginal over Z """
+        if parameters is None:
+            parameters = self.parameters
+        if observations is None:
+            observations = self.observations
+        z_prob = self.message_helper.latent_var_marginal(
+                observations=observations,
+                parameters=parameters,
+                forward_message=self.forward_message,
+                backward_message=self.backward_message,
+                tqdm=tqdm,
+                )
+        return z_prob
+
+
 
     def sample_gibbs(self, tqdm=None):
         """ One Step of Blocked Gibbs Sampler

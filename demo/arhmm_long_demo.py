@@ -43,9 +43,14 @@ print(data['latent_vars'])
 print(data['parameters'])
 
 ## Plot Data
-### TODO
+import matplotlib.pyplot as plt
+import seaborn as sns
+sns.set()
 
-
+fig, axes = plt.subplots(2, 1, sharex=True, gridspec_kw={'height_ratios':[3,1]})
+axes[0].plot(data['observations'][:,0,0], 'C0')
+axes[0].plot(data['observations'][:,0,1], 'C1')
+axes[1].plot(data['latent_vars'], '.')
 
 # ARPHMM Prior
 ## Default Prior
@@ -99,7 +104,19 @@ print(helper.parameters_gibbs_sample(
 ### Default is smoothed distribution
 zhat = helper.latent_var_sample(data['observations'], parameters)
 print(np.sum(zhat != data['latent_vars']))
-### TODO add confusion matrix / plot
+
+fig, ax = plt.subplots(1, 1)
+ax.plot(data['latent_vars'], 'C0.', label='truth')
+ax.plot(zhat+0.1, 'C1.', label='smoothed sample')
+for err_loc in np.where(zhat != data['latent_vars'])[0]:
+    ax.axvline(x=err_loc, color='red', linewidth=1, linestyle='--')
+ax.legend()
+ax.set_xlabel("red lines are errors")
+
+from sklearn.metrics import confusion_matrix
+print('Confusion Matrix:')
+print(confusion_matrix(data['latent_vars'], zhat))
+
 
 ### Sample latent variables from filtered/predictive distribution
 print(helper.latent_var_sample(data['observations'], parameters, distribution="filtered"))
@@ -107,6 +124,7 @@ print(helper.latent_var_sample(data['observations'], parameters, distribution="p
 
 # ARPHMM Preconditioner
 preconditioner = ARPHMMPreconditioner()
+parameters.pi_type = 'expanded'
 grad = helper.gradient_marginal_loglikelihood(data['observations'], parameters)
 ## Precondition Gradient
 print(grad)
@@ -166,6 +184,7 @@ for _ in range(5):
 
 ## Example SGRLD Step
 sampler.parameters = sampler.prior.sample_prior()
+sampler.parameters.pi_type = 'expanded'
 print(sampler.parameters)
 for _ in range(5):
     print(sampler.sample_sgrld(epsilon=0.1, preconditioner=preconditioner).project_parameters())
@@ -232,6 +251,7 @@ print(evaluator.samples)
 
 
 ## Run a few SGRLD Steps
+evaluator.sampler.parameters.pi_type = 'expanded'
 for _ in range(10):
     evaluator.evaluate_sampler_step(
             ['sample_sgrld', 'project_parameters'],
@@ -241,6 +261,9 @@ for _ in range(10):
 print(evaluator.metrics)
 print(evaluator.samples)
 
+from sgmcmc_ssm.plotting_utils import plot_metrics, plot_trace_plot
+plot_metrics(evaluator)
+plot_trace_plot(evaluator)
 
 
 

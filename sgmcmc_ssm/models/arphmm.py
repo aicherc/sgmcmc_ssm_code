@@ -2,13 +2,16 @@ import numpy as np
 import logging
 logger = logging.getLogger(name=__name__)
 
-from ..base_parameter import (
+from ..base_parameters import (
         BaseParameters, BasePrior, BasePreconditioner,
         )
-from ..variable_mixins import (
-        PiMixin, PiPrior, PiPreconditioner,
-        DMixin, DPrior, DPreconditioner,
-        RMixin, RPrior, RPreconditioner,
+from ..variables import (
+        TransitionMatrixParamHelper, TransitionMatrixPriorHelper,
+        TransitionMatrixPrecondHelper,
+        RectMatricesParamHelper, RectMatricesPriorHelper,
+        RectMatricesPrecondHelper,
+        CovariancesParamHelper, CovariancesPriorHelper,
+        CovariancesPrecondHelper,
         )
 from ..sgmcmc_sampler import (
         SGMCMCSampler,
@@ -20,53 +23,54 @@ from .._utils import (
         varp_stability_projection,
         )
 
-class ARPHMMParameters(PiMixin, RMixin, DMixin,
-        BaseParameters):
-    """ ARPHMM Parameters """
+class ARPHMMParameters(BaseParameters):
+    """ AR(p) HMM Parameters """
+    _param_helper_list = [
+            TransitionMatrixParamHelper(name='pi', dim_names=['num_states', 'pi_type']),
+            RectMatricesParamHelper(name='D', dim_names=['m', 'd', 'num_states']),
+            CovariancesParamHelper(name='R', dim_names=['m', 'num_states']),
+            ]
+    for param_helper in _param_helper_list:
+        properties = param_helper.get_properties()
+        for name, prop in properties.items():
+            vars()[name] = prop
+
     def __str__(self):
         my_str = "ARPHMMParameters:"
         my_str += "\npi:\n" + str(self.pi)
-        my_str += "\npi_type: `" + str(self.pi_type) + "`"
         my_str += "\nD:\n" + str(self.D)
         my_str += "\nR:\n" + str(self.R)
         return my_str
 
-    def _project_parameters(self, **kwargs):
-        if kwargs.get('thresh_D', True):
-           # Threshold B to be stable
-           D = self.D
-           for k, D_k in enumerate(D):
-               D_k = varp_stability_projection(D_k,
-                       eigenvalue_cutoff=0.9999, logger=logger)
-               D[k] = D_k
-           self.D = D
-
     @property
     def p(self):
-        return self.dim['d']//self.dim['m']
+        return (self.d//self.m)
 
-class ARPHMMPrior(PiPrior, RPrior, DPrior, BasePrior):
-    """ ARPHMM Prior for (Pi, D, Rinv)
-
-    The prior for Pi_k is Dirichlet
-    The prior for D_k is Gaussian (mean, cov \propto to Q)
-    The prior for Rinv_k is Wishart
-
+class ARPHMMPrior(BasePrior):
+    """ AR(p) HMM Prior
+    See individual Prior Mixins for details
     """
-    @staticmethod
-    def _parameters(**kwargs):
-        return ARPHMMParameters(**kwargs)
+    _Parameters = ARPHMMParameters
+    _prior_helper_list = [
+            CovariancesPriorHelper(name='R', dim_names=['m', 'num_states'],
+                matrix_name='D'),
+            TransitionMatrixPriorHelper(name='pi', dim_names=['num_states']),
+            RectMatricesPriorHelper(name='D',
+                dim_names=['m', 'd', 'num_states'],
+                var_row_name='R'),
+            ]
 
-    @property
-    def p(self):
-        return self.dim['d']//self.dim['m']
-
-class ARPHMMPreconditioner(PiPreconditioner, RPreconditioner,
-        DPreconditioner, BasePreconditioner):
-    """ Preconditioner for ARPHMM
-    See individual Preconditioner Mixin for details
+class ARPHMMPreconditioner(BasePreconditioner):
+    """ AR(p) HMM Preconditioner
+    See individual Precondition Mixins for details
     """
-    pass
+    _precond_helper_list = [
+            TransitionMatrixPrecondHelper(name='pi', dim_names=['num_states']),
+            RectMatricesPrecondHelper(name='D',
+                dim_names=['m', 'd', 'num_states'],
+                var_row_name='R'),
+            CovariancesPrecondHelper(name='R', dim_names=['m', 'num_states']),
+            ]
 
 def generate_arphmm_data(T, parameters, initial_message = None,
         tqdm=None):
@@ -203,7 +207,7 @@ class ARPHMMHelper(HMMHelper):
 
         Returns:
             sufficient_stat (dict) containing:
-                alpha_Pi (ndarray) num_states by num_states, pairwise z counts
+                alpha (ndarray) num_states by num_states, pairwise z counts
                 S_count (ndarray) num_states, z counts
                 S_prevprev (ndarray) num_states mp by mp, z counts
                 S_curprev (ndarray) num_states m by mp, y sum
@@ -239,11 +243,16 @@ class ARPHMMHelper(HMMHelper):
             yy_curcur[k] = np.dot(yk.T, yk)
 
         # Return sufficient Statistics
-        sufficient_stat = dict(
-                alpha_Pi=z_pair_count,
+        sufficient_stat = {}
+        sufficient_stat['pi'] = dict(alpha = z_pair_count)
+        sufficient_stat['D'] = dict(
+                S_prevprev = yy_prevprev,
+                S_curprev = yy_curprev,
+                )
+        sufficient_stat['R'] = dict(
                 S_count=S_count,
-                S_prevprev=yy_prevprev,
-                S_curprev=yy_curprev,
+                S_prevprev = yy_prevprev,
+                S_curprev = yy_curprev,
                 S_curcur=yy_curcur,
                 )
         return sufficient_stat
@@ -259,7 +268,7 @@ class ARPHMMHelper(HMMHelper):
             loglikelihoods[k] = \
                 -0.5 * np.dot(LRinvTdelta, LRinvTdelta) + \
                 -0.5 * self.m * np.log(2*np.pi) + \
-                np.sum(np.log(np.diag(LRinv_k)))
+                np.sum(np.log(np.abs(np.diag(LRinv_k))))
         return loglikelihoods
 
     def _likelihoods(self, y_cur, parameters):
@@ -344,11 +353,18 @@ class ARPHMMHelper(HMMHelper):
 
 class ARPHMMSampler(SGMCMCSampler):
     # Note d = m*p
-    def __init__(self, num_states, m, d, name="GAUSSHMMSampler", **kwargs):
+    def __init__(self, num_states, m, p=None, d=None, name="ARPHMMSampler", **kwargs):
         self.options = kwargs
         self.num_states = num_states
         self.m = m
-        self.d = d
+        if p is None:
+            if d is None:
+                raise ValueError("Need to specify p or d dimension parameter")
+            else:
+                self.p = d//m
+        else:
+            self.p = p
+
         self.name = name
         self.message_helper=ARPHMMHelper(
                 num_states=self.num_states,
@@ -358,8 +374,8 @@ class ARPHMMSampler(SGMCMCSampler):
         return
 
     @property
-    def p(self):
-        return self.d//self.m
+    def d(self):
+        return self.p*self.m
 
     def setup(self, observations, prior, parameters=None,
             forward_message=None):
@@ -367,17 +383,17 @@ class ARPHMMSampler(SGMCMCSampler):
 
         Args:
             observations (ndarray): T by p+1 by m ndarray of time series values
-            prior (GAUSSHMMPrior): prior
+            prior (ARPMMHMMPrior): prior
             forward_message (ndarray): prior probability for latent state
-            parameters (GAUSSHMMParameters): initial parameters
+            parameters (ARPHMMParameters): initial parameters
                 (optional, will sample from prior by default)
 
         """
         # Check Shape
-        if np.shape(observations)[1] != self.m:
-            raise ValueError("observations second dimension does not match m")
-        if np.shape(observations)[2] != self.m*self.p:
-            raise ValueError("observations third dimension does not match m*p")
+        if np.shape(observations)[1] != self.p+1:
+            raise ValueError("observations second dimension does not match p+1")
+        if np.shape(observations)[2] != self.m:
+            raise ValueError("observations third dimension does not match m")
 
         self.observations = observations
         self.T = np.shape(self.observations)[0]
@@ -495,11 +511,26 @@ class ARPHMMSampler(SGMCMCSampler):
                 )
         return z
 
+    def calc_z_prob(self, parameters=None, observations=None, tqdm=None, **kwargs
+        """ Calculate Posterior Marginal over Z """
+        if parameters is None:
+            parameters = self.parameters
+        if observations is None:
+            observations = self.observations
+        z_prob = self.message_helper.latent_var_marginal(
+                observations=observations,
+                parameters=parameters,
+                forward_message=self.forward_message,
+                backward_message=self.backward_message,
+                tqdm=tqdm,
+                )
+        return z_prob
+
     def sample_gibbs(self, tqdm=None):
         """ One Step of Blocked Gibbs Sampler
 
         Returns:
-            parameters (GAUSSHMMParameters): sampled parameters after one step
+            parameters (ARPHMMParameters): sampled parameters after one step
         """
         z = self.sample_z(tqdm=tqdm)
         new_parameters = self.message_helper.parameters_gibbs_sample(

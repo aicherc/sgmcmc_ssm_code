@@ -51,7 +51,7 @@ def pf_wrapper(
     if tL is None:
         tL = T
 
-    n = parameters.n
+    n = getattr(parameters, 'n', 1)
     kernel.set_parameters(parameters=parameters)
 
     if elementwise_statistic:
