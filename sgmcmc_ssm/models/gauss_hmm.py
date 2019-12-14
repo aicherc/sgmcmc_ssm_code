@@ -804,7 +804,8 @@ class GaussHMMSampler(SGMCMCSampler):
                 )
         return z
 
-    def calc_z_prob(self, parameters=None, observations=None, tqdm=None, **kwargs
+    def calc_z_prob(self, parameters=None, observations=None, tqdm=None,
+            **kwargs):
         """ Calculate Posterior Marginal over Z """
         if parameters is None:
             parameters = self.parameters
