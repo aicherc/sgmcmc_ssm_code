@@ -178,7 +178,9 @@ def nemeth_smoother(particles, log_weights, statistics,
 
 def paris_smoother(particles, log_weights, statistics,
         additive_statistic_func, kernel,
-        Ntilde=2, accept_reject=True, **kwargs):
+        Ntilde=2, accept_reject=True,
+        max_accept_reject=None, manual_sample_threshold=None,
+        **kwargs):
     """ Algorithm 2 of PaRIS
 
     Calculate E[SUM[h(x_t, x_{t+1})] | Y]
@@ -213,6 +215,8 @@ def paris_smoother(particles, log_weights, statistics,
         # Accept-Reject O(NK) Implementation
         rewired_ancestor_indices = accept_reject_based_backward_sampling(
                 particles, log_weights, new_particles, kernel, Ntilde,
+                max_accept_reject=max_accept_reject,
+                manual_sample_threshold=manual_sample_threshold,
                 )
 
     else:
@@ -235,7 +239,9 @@ def paris_smoother(particles, log_weights, statistics,
     indices = np.array([ii for ii in range(N) for _ in range(Ntilde)])
     xi_next = new_particles[indices]
     additive_statistic = additive_statistic_func(
-            rewired_parents, xi_next)
+            x_t=rewired_parents,
+            x_next=xi_next,
+            )
     additive_statistic *= kwargs.get('additive_scale', 1.0)
 
     new_statistics = np.reshape(
@@ -248,7 +254,7 @@ def paris_smoother(particles, log_weights, statistics,
     return new_particles, new_log_weights, new_statistics
 
 def accept_reject_based_backward_sampling(particles, log_weights, new_particles,
-        kernel, Ntilde, max_accept_reject=None):
+        kernel, Ntilde, max_accept_reject=None, manual_sample_threshold=None):
     """ Algorithm 3 of PaRIS to sample J (rewired ancestor indices)
 
     Args:
@@ -258,7 +264,12 @@ def accept_reject_based_backward_sampling(particles, log_weights, new_particles,
         kernel (Kernel): kernel
         Ntilde (int): precision parameter
         max_accept_reject (int, optional): number of accept_reject tries
-            (default is 5*log10(N))
+            (default is 100*log10(N/10))
+        manual_sample_threshold (int, optional):
+            threshold number of samples to manually sample
+            early terminates accept_reject
+            (default is 10*log10(N/10))
+
     Returns:
         rewired_ancestor_indices (ndarray): N by Ntilde, indices J
     """
@@ -267,7 +278,9 @@ def accept_reject_based_backward_sampling(particles, log_weights, new_particles,
     loglikelihood_max = kernel.get_prior_log_density_max()
 
     if max_accept_reject is None:
-        max_accept_reject = int(5*np.log10(N))
+        max_accept_reject = int(100*np.log10(N/10))
+    if manual_sample_threshold is None:
+        manual_sample_threshold = int(10*np.log10(N/10))
 
     # J
     rewired_ancestor_indices = np.zeros((N, Ntilde), dtype=int)
@@ -282,6 +295,9 @@ def accept_reject_based_backward_sampling(particles, log_weights, new_particles,
             # Exit when L is empty
             if size_L == 0:
                 converged = True
+                break
+            # Early terminate to manual resample when L is small
+            if size_L <= manual_sample_threshold:
                 break
 
             # Draw I
@@ -303,9 +319,11 @@ def accept_reject_based_backward_sampling(particles, log_weights, new_particles,
                 else:
                     new_L.append(L[k])
             L = new_L
+            #print("Not Converged {0} of {1} after {2} of {3} steps".format(len(L), N, _, max_accept_reject))
 
         if not converged:
             # Manually Sample remaining i
+            #print("Manually Sampling {0} of {1} after {2} of {3} steps".format(len(L), N, _, max_accept_reject))
             for i in L:
                 child_loglikelihood = kernel.prior_log_density(
                         particles,
@@ -353,34 +371,6 @@ def log_normalize(log_weights):
     probs = np.exp(log_weights-np.max(log_weights))
     probs /= np.sum(probs)
     return probs
-
-# Additive Sufficient Statistic Function
-def gaussian_sufficient_statistics(x_t, x_next, y_next, **kwargs):
-    """ Gaussian Sufficient Statistics
-
-    h[0] = sum(x_{t+1})
-    h[1] = sum(x_{t+1} x_{t+1}^T)
-    h[2] = sum(x_t x_{t+1})
-
-    Args:
-        x_t (N by n ndarray): particles for x_t
-        x_next (N by n ndarray): particles for x_{t+1}
-        y_next (m ndarray): y_{t+1}
-    Returns:
-        h (N by p ndarray): sufficient statistic
-    """
-    N = np.shape(x_t)[0]
-    if (len(np.shape(x_t)) > 1) and (np.shape(x_t)[1] > 1):
-        # x is vector
-        h = [x_next,
-                np.einsum('ij,ik->ijk', x_next, x_next),
-                np.einsum('ij,ik->ijk', x_t, x_next),
-            ]
-        h = np.hstack([np.reshape(h_, (N, -1)) for h_ in h])
-    else:
-        # n = 1, x is scalar
-        h = np.hstack([x_next, x_next**2, x_t*x_next])
-    return h
 
 
 

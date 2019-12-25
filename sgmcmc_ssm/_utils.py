@@ -17,7 +17,10 @@ logger = logging.getLogger(name=__name__)
 def random_categorical(pvals, size=None):
     out = np.random.multinomial(n=1, pvals=pvals, size=size).dot(
             np.arange(len(pvals)))
-    return int(out)
+    if size is None:
+        return int(out)
+    else:
+        return np.array(out, dtype=int)
 
 # Fixed Wishart
 def array_wishart_rvs(df, scale, **kwargs):
@@ -127,6 +130,13 @@ def lower_tri_mat_inv(lower_tri_mat):
     if info != 0:
         raise RuntimeError("Error in Lower Triangular Inverse")
     return lower_tri_inv
+
+# Convert Lower Triangular Mat Vector to Matrix
+def tril_vector_to_mat(vec):
+    n = int(np.sqrt(len(vec)*2))
+    mat = np.zeros((n,n), dtype=float)
+    mat[np.tril_indices(n)] = vec
+    return mat
 
 # Symmetrize Matrices
 def sym(mat):

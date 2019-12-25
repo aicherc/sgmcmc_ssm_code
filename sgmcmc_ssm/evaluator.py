@@ -6,8 +6,23 @@ logger = logging.getLogger(name=__name__)
 
 class BaseEvaluator(object):
     """ Evaluator Base Class """
-    def __init__(self):
-        raise NotImplementedError()
+    def __init__(self, sampler, metric_functions=None, sample_functions=None):
+        # Set Sampler
+        self.sampler = sampler
+
+        # Check metric functions
+        metric_functions = self._process_metric_functions(metric_functions)
+        self.metric_functions = metric_functions
+
+        # Check sample functions
+        sample_functions = self._process_sample_functions(sample_functions)
+        self.sample_functions = sample_functions
+
+        # Base Init
+        self.metrics = pd.DataFrame()
+        self.samples = pd.DataFrame()
+
+        return
 
     @staticmethod
     def _process_metric_functions(metric_functions):
@@ -93,7 +108,7 @@ class BaseEvaluator(object):
         if metric_functions is None:
             metric_functions = self.metric_functions
         else:
-            metric_function = self._process_metric_functions(metric_functions)
+            metric_functions = self._process_metric_functions(metric_functions)
 
         if iteration is None:
             iteration = self.iteration
@@ -131,11 +146,11 @@ class BaseEvaluator(object):
             extra_columns (dict): extra metadata to add as columns
         Returns:
             pd.DataFrame with columns
-                metric, variable, value, iteration, sampler, data, extra_columns
+                metric, variable, value, iteration, extra_columns
 
         """
         metrics = self.metrics.copy()
-        for k,v in extra_columns:
+        for k,v in extra_columns.items():
             metrics[k] = v
         return metrics
 
@@ -152,7 +167,7 @@ class BaseEvaluator(object):
         if self.sample_functions is None:
             logger.warning("No sample functions were provided to track!!!")
         samples = self.samples.copy()
-        for k,v in extra_columns:
+        for k,v in extra_columns.items():
             samples[k] = v
         return samples
 
@@ -164,7 +179,7 @@ class BaseEvaluator(object):
         samples.to_csv(filename + ".csv", index = False)
         return
 
-
+# Old Evaluator
 class SamplerEvaluator(BaseEvaluator):
     """ Wrapper to handle measuring a Sampler's Performance Online
 
@@ -191,32 +206,6 @@ class SamplerEvaluator(BaseEvaluator):
             * variable (string)
             * value (object)
             * iteration (int)
-
-    Methods:
-        load_state(self, metrics_df, samples_df, iteration)
-        get_state(self)
-        get_metrics(self, **extra_columns)
-        get_samples(self, **extra_columns)
-        reset_metrics(self)
-        reset_samples(self)
-        save_metrics(self, filename)
-        save_samples(self, filename)
-        evaluate_sampler_step(self, sampler_func_name, sampler_func_kwargs)
-        eval_metric_functions(self, metric_functions)
-        eval_sample_functions(self, sample_functions)
-
-    Example:
-        metric_functions = [
-            metric_func_from_parameter("A", true_A, 'mse'),
-            metric_func_from_sampler(sampler_func_name = "exact_loglikelihood"),
-                          ]
-        sample_functions = {
-            'A': lambda sampler: sampler.parameter.A,
-            'LQinv': lambda sampler: sampler.parameter.LQinv,
-            }
-        TopicModelEvaluater(data, sampler, metric_functions, sample_functions)
-
-
     """
     def __init__(self, sampler,
             metric_functions = None, sample_functions = None,
@@ -224,7 +213,7 @@ class SamplerEvaluator(BaseEvaluator):
         self.sampler = sampler
 
         # Check metric functions
-        metric_function = self._process_metric_functions(metric_functions)
+        metric_functions = self._process_metric_functions(metric_functions)
         self.metric_functions = metric_functions
 
         # Check sample functions
@@ -298,62 +287,62 @@ class SamplerEvaluator(BaseEvaluator):
         self._init_samples()
         return
 
-    def evaluate_sampler_step(self, sampler_func_name,
-            sampler_func_kwargs = None, evaluate = True):
+    def evaluate_sampler_step(self, iter_func_name,
+            iter_func_kwargs = None, evaluate = True):
         """ Evaluate the performance of the sampler steps
 
         Args:
-            sampler_func_name (string or list of strings):
+            iter_func_name (string or list of strings):
                 name(s) of sampler member functions
                 (e.g. `'sample_sgld'` or `['sample_sgld']*10`)
-            sampler_func_kwargs (kwargs or list of kwargs):
-                options to pass to sampler_func_name
+            iter_func_kwargs (kwargs or list of kwargs):
+                options to pass to iter_func_name
             evaluate (bool): whether to perform evaluation (default = True)
 
         Returns:
-            out (ouptput of sampler_func_name)
+            out (ouptput of iter_func_name)
 
         """
         logger.info("Sampler %s, Iteration %d",
                 self.sampler.name, self.iteration+1)
 
         # Single Function
-        if isinstance(sampler_func_name, str):
-            sampler_func = getattr(self.sampler, sampler_func_name, None)
-            if sampler_func is None:
+        if isinstance(iter_func_name, str):
+            iter_func = getattr(self.sampler, iter_func_name, None)
+            if iter_func is None:
                 raise ValueError(
-                    "sampler_func_name `{}` is not in sampler".format(
-                            sampler_func_name)
+                    "iter_func_name `{}` is not in sampler".format(
+                            iter_func_name)
                         )
-            if sampler_func_kwargs is None:
-                sampler_func_kwargs = {}
+            if iter_func_kwargs is None:
+                iter_func_kwargs = {}
 
             sampler_start_time = time.time()
-            out = sampler_func(**sampler_func_kwargs)
+            out = iter_func(**iter_func_kwargs)
             sampler_step_time = time.time() - sampler_start_time
 
         # Multiple Steps
-        elif isinstance(sampler_func_name, list):
-            sampler_funcs = [getattr(self.sampler, func_name, None)
-                    for func_name in sampler_func_name]
-            if None in sampler_funcs:
-                raise ValueError("Invalid sampler_func_name")
+        elif isinstance(iter_func_name, list):
+            iter_funcs = [getattr(self.sampler, func_name, None)
+                    for func_name in iter_func_name]
+            if None in iter_funcs:
+                raise ValueError("Invalid iter_func_name")
 
-            if sampler_func_kwargs is None:
-                sampler_func_kwargs = [{} for _ in sampler_funcs]
-            if not isinstance(sampler_func_kwargs, list):
-                raise TypeError("sampler_func_kwargs must be a list of dicts")
-            if len(sampler_func_kwargs) != len(sampler_func_name):
-                raise ValueError("sampler_func_kwargs must be same length " +
-                    "as sampler_func_name")
+            if iter_func_kwargs is None:
+                iter_func_kwargs = [{} for _ in iter_funcs]
+            if not isinstance(iter_func_kwargs, list):
+                raise TypeError("iter_func_kwargs must be a list of dicts")
+            if len(iter_func_kwargs) != len(iter_func_name):
+                raise ValueError("iter_func_kwargs must be same length " +
+                    "as iter_func_name")
             sampler_start_time = time.time()
             out = []
-            for sampler_func, kwargs in zip(sampler_funcs, sampler_func_kwargs):
-                out.append(sampler_func(**kwargs))
+            for iter_func, kwargs in zip(iter_funcs, iter_func_kwargs):
+                out.append(iter_func(**kwargs))
             sampler_step_time = time.time() - sampler_start_time
 
         else:
-            raise TypeError("Invalid sampler_func_name")
+            raise TypeError("Invalid iter_func_name")
 
         self.iteration += 1
         self.elapsed_time += sampler_step_time
@@ -382,14 +371,17 @@ class SamplerEvaluator(BaseEvaluator):
 
         return out
 
-
+# Offline Evaluator
 class OfflineEvaluator(BaseEvaluator):
     """ Wrapper to handle measuring a Sampler's Performance Offline
 
     Args:
         sampler (Sampler): the sampler
         parameters_list (list or DataFrame): list of parameters to evaluate offline
-        metric_functions (func or list of funcs): evaluation functions
+        parameters_times (list or ndarray, optional): fit time for parameters
+            Should be same size as parameters_list
+            Time is in seconds
+        metric_functions (func or list of funcs, optional): evaluation functions
             Each function takes a sampler and returns a dict (or list of dict)
                 {metric, variable, value} for each
             (See metric_functions)
@@ -410,34 +402,8 @@ class OfflineEvaluator(BaseEvaluator):
             * variable (string)
             * value (object)
             * iteration (int)
-
-    Methods:
-        load_state(self, metrics_df, samples_df, eval_flag)
-        get_state(self)
-        get_metrics(self, **extra_columns)
-        get_samples(self, **extra_columns)
-        reset_metrics(self)
-        reset_samples(self)
-        save_metrics(self, filename)
-        save_samples(self, filename)
-        evaluate_sampler_step(self, sampler_func_name, sampler_func_kwargs)
-        eval_metric_functions(self, metric_functions)
-        eval_sample_functions(self, sample_functions)
-
-    Example:
-        metric_functions = [
-            metric_func_from_parameter("A", true_A, 'mse'),
-            metric_func_from_sampler(sampler_func_name = "exact_loglikelihood"),
-                          ]
-        sample_functions = {
-            'A': lambda sampler: sampler.parameter.A,
-            'LQinv': lambda sampler: sampler.parameter.LQinv,
-            }
-        ModelEvaluater(data, sampler, metric_functions, sample_functions)
-
-
     """
-    def __init__(self, sampler, parameters_list,
+    def __init__(self, sampler, parameters_list, parameters_times=None,
             metric_functions = None, sample_functions = None,
             init_state=None):
         # Set Sampler
@@ -446,9 +412,15 @@ class OfflineEvaluator(BaseEvaluator):
         # Set parameter list
         self.parameters_list = self._process_parameters_list(parameters_list)
         self.iteration = np.max(self.parameters_list['iteration'])
+        self.parameters_times = self._process_parameters_times(parameters_times)
+        if parameters_times is not None:
+            if self.parameters_times.shape[0] != self.parameters_list.shape[0]:
+                raise ValueError(
+            "parameters_times and parameters_list are not the same length"
+            )
 
         # Check metric functions
-        metric_function = self._process_metric_functions(metric_functions)
+        metric_functions = self._process_metric_functions(metric_functions)
         self.metric_functions = metric_functions
 
         # Check sample functions
@@ -484,6 +456,27 @@ class OfflineEvaluator(BaseEvaluator):
             return parameters_list
         else:
             raise ValueError("parameters_list is not a list or pd.DataFrame")
+
+    @staticmethod
+    def _process_parameters_times(parameters_times):
+        if parameters_times is None:
+            return None
+        elif isinstance(parameters_times, pd.DataFrame):
+            if 'iteration' not in parameters_times.columns:
+                raise ValueError("`iteration` not found in parameters_times")
+            if 'time' not in parameters_times.columns:
+                raise ValueError("`time` not found in parameters_times")
+            return parameters_times.sort_values(by='iteration')
+        elif isinstance(parameters_times, list) or \
+                isinstance(parameters_times, np.ndarray):
+            iteration = np.arange(len(parameters_times))
+            parameters_times = pd.DataFrame(dict(
+                iteration = iteration,
+                time = parameters_times,
+                ))
+            return parameters_times
+        else:
+            raise ValueError("parameters_times is not a list or pd.DataFrame")
 
     def load_state(self, metrics_df, samples_df, eval_flag):
         """ Overwrite metrics, samples, and iteration """
@@ -529,24 +522,26 @@ class OfflineEvaluator(BaseEvaluator):
     def num_to_eval(self):
         return self.eval_flag.shape[0] - self.eval_flag.eval_flag.sum()
 
-    def evaluate(self, num_to_eval=None, eval_order="recursive",
-            sampler_func_name=None, sampler_func_kwargs=None,
+    def evaluate(self, num_to_eval=None, max_time=None, eval_order="recursive",
+            iter_func_name=None, iter_func_kwargs=None,
             tqdm=None):
         """ Evaluate the parameters in parameters_list
 
-        Evaluate both metric_funcs + sampler_funcs
+        Evaluate both metric_funcs + iter_funcs
 
         Args:
             num_to_eval (int): number of parameters to evaluate
                 (default is to evaluate all)
+            max_time (double): max time to evaluate in seconds
+                (default is inf)
             eval_order (string): order to evaluate parameters
                 (that haven't been evaluated)
                 "recursive": evaluate first, last, and then recursively bisect
                 "sequential": evaluate first, second, third
-            sampler_func_name (string or list of strings):
+            iter_func_name (string or list of strings):
                 functions to call before evaluation (after setting parameters)
-            sampler_func_kwargs (kwargs or list of kwargs):
-                options to pass to sampler_func_name
+            iter_func_kwargs (kwargs or list of kwargs):
+                options to pass to iter_func_name
 
         Return:
 
@@ -554,10 +549,14 @@ class OfflineEvaluator(BaseEvaluator):
         """
         if num_to_eval is None:
             num_to_eval = self.num_to_eval()
+        if max_time is None:
+            max_time = np.inf
 
-        pbar = range(num_to_eval)
+        pbar = range(min(num_to_eval, self.num_to_eval()))
         if tqdm is not None:
             pbar = tqdm(pbar, desc="offline eval")
+
+        eval_start_time = time.time()
         for _ in pbar:
             if self.eval_flag.eval_flag.sum() == self.eval_flag.shape[0]:
                 logging.warning("No more parameters to evaluate on")
@@ -568,41 +567,45 @@ class OfflineEvaluator(BaseEvaluator):
                     self.parameters_list['iteration'] == iteration
                     ]['parameters'].iloc[0].copy()
 
+            if tqdm is not None:
+                pbar.set_description("offline eval on iteration {}".format(
+                    iteration))
             logger.info("Sampler %s, Iteration %d",
                 self.sampler.name, iteration)
+
             # Call Sampler Func
-            if sampler_func_name is None:
+            if iter_func_name is None:
                 pass
 
-            elif isinstance(sampler_func_name, str):
+            elif isinstance(iter_func_name, str):
                 # Single Functions
-                sampler_func = getattr(self.sampler, sampler_func_name, None)
-                if sampler_func is None:
+                iter_func = getattr(self.sampler, iter_func_name, None)
+                if iter_func is None:
                     raise ValueError(
-                        "sampler_func_name `{}` is not in sampler".format(
-                                sampler_func_name)
+                        "iter_func_name `{}` is not in sampler".format(
+                                iter_func_name)
                             )
-                if sampler_func_kwargs is None:
-                    sampler_func_kwargs = {}
-                sampler_func(**sampler_func_kwargs)
+                if iter_func_kwargs is None:
+                    iter_func_kwargs = {}
+                iter_func(**iter_func_kwargs)
 
-            elif isinstance(sampler_func_name, list):
+            elif isinstance(iter_func_name, list):
                 # Multiple Functions
-                sampler_funcs = [getattr(self.sampler, func_name, None)
-                        for func_name in sampler_func_name]
-                if None in sampler_funcs:
-                    raise ValueError("Invalid sampler_func_name")
-                if sampler_func_kwargs is None:
-                    sampler_func_kwargs = [{} for _ in sampler_funcs]
-                if not isinstance(sampler_func_kwargs, list):
-                    raise TypeError("sampler_func_kwargs must be a list of dicts")
-                if len(sampler_func_kwargs) != len(sampler_func_name):
-                    raise ValueError("sampler_func_kwargs must be same length " +
-                        "as sampler_func_name")
-                for sampler_func, kwargs in zip(sampler_funcs, sampler_func_kwargs):
-                    sampler_func(**kwargs)
+                iter_funcs = [getattr(self.sampler, func_name, None)
+                        for func_name in iter_func_name]
+                if None in iter_funcs:
+                    raise ValueError("Invalid iter_func_name")
+                if iter_func_kwargs is None:
+                    iter_func_kwargs = [{} for _ in iter_funcs]
+                if not isinstance(iter_func_kwargs, list):
+                    raise TypeError("iter_func_kwargs must be a list of dicts")
+                if len(iter_func_kwargs) != len(iter_func_name):
+                    raise ValueError("iter_func_kwargs must be same length " +
+                        "as iter_func_name")
+                for iter_func, kwargs in zip(iter_funcs, iter_func_kwargs):
+                    iter_func(**kwargs)
             else:
-                raise TypeError("Invalid sampler_func_name")
+                raise TypeError("Invalid iter_func_name")
 
             # Evaluate metrics + samples
             self.eval_metric_functions(iteration=iteration)
@@ -611,6 +614,10 @@ class OfflineEvaluator(BaseEvaluator):
             # Mark Iteration as sampled
             self.eval_flag.loc[
                     self.eval_flag.iteration == iteration, 'eval_flag'] = True
+
+            # Early Termination on Max Time
+            if time.time() - eval_start_time > max_time:
+                break
         return
 
     def _get_eval_iteration(self, eval_order="recursive"):
@@ -641,7 +648,26 @@ class OfflineEvaluator(BaseEvaluator):
             raise ValueError("Unrecoginized eval_order {0}".format(eval_order))
         return iteration
 
+    @staticmethod
+    def _add_time(df, times):
+        """ Append times to df by matching on iteration """
+        df_times = pd.merge(df, times, on='iteration')
+        return df_times
 
+    def get_metrics(self, extra_columns={}):
+        metrics = super().get_metrics(extra_columns=extra_columns)
+        if self.parameters_times is not None:
+            metrics = self._add_time(metrics, self.parameters_times)
+        return metrics
+
+    def get_samples(self, extra_columns={}):
+        samples = super().get_samples(extra_columns=extra_columns)
+        if self.parameters_times is not None:
+            samples = self._add_time(samples, self.parameters_times)
+        return samples
+
+
+# Helper functions
 def average_parameters_list(parameters_list, burnin=None):
     """ Return a running average of parameters after burnin
 

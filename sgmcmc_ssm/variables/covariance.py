@@ -9,6 +9,7 @@ from ..base_parameters import (
 from .._utils import (
         array_wishart_rvs,
         pos_def_mat_inv,
+        tril_vector_to_mat,
         )
 logger = logging.getLogger(name=__name__)
 
@@ -18,21 +19,43 @@ logger = logging.getLogger(name=__name__)
 class CovarianceParamHelper(ParamHelper):
     def __init__(self, name='Q', dim_names=None):
         self.name = name
+        self._lt_vec_name = 'L{}inv_vec'.format(name)
         self._lt_prec_name = 'L{}inv'.format(name)
         self._inv_name = '{}inv'.format(name)
         self.dim_names = ['n'] if dim_names is None else dim_names
         return
 
     def set_var(self, param, **kwargs):
-        if self._lt_prec_name in kwargs:
+        # Handle kwargs input
+        if self._lt_vec_name in kwargs:
+            # LQinv_vec
+            LQinv_vec = np.array(kwargs[self._lt_vec_name]).astype(float)
+            n = int(np.sqrt(len(LQinv_vec)*2))
+            param.var_dict[self._lt_vec_name] = LQinv_vec
+            param._set_check_dim(**{self.dim_names[0]: n})
+
+        elif self._lt_prec_name in kwargs:
+            # LQinv
             n, n2 = np.shape(kwargs[self._lt_prec_name])
             if n != n2:
                 raise ValueError("{} must be square matrix".format(
                     self._lt_prec_name))
             LQinv = np.array(kwargs[self._lt_prec_name]).astype(float)
-            LQinv[np.triu_indices_from(LQinv, 1)] = 0.0 # zero out upper tri
+            LQinv_vec = LQinv[np.tril_indices_from(LQinv)]
+            param.var_dict[self._lt_vec_name] = LQinv_vec
+            param._set_check_dim(**{self.dim_names[0]: n})
 
-            param.var_dict[self._lt_prec_name] = LQinv
+        elif self.name in kwargs:
+            # Q
+            n, n2 = np.shape(kwargs[self.name])
+            if n != n2:
+                raise ValueError("{} must be square matrix".format(
+                    self.name))
+            LQinv = np.linalg.cholesky(np.linalg.inv(
+                np.array(kwargs[self.name]).astype(float)
+                ))
+            LQinv_vec = LQinv[np.tril_indices_from(LQinv)]
+            param.var_dict[self._lt_vec_name] = LQinv_vec
             param._set_check_dim(**{self.dim_names[0]: n})
         else:
             raise ValueError("{} not provided".format(self._lt_prec_name))
@@ -40,8 +63,11 @@ class CovarianceParamHelper(ParamHelper):
 
     def project_parameters(self, param, **kwargs):
         name_kwargs = kwargs.get(self.name, {})
+        if name_kwargs.get('fixed') is not None:
+            setattr(param, self._lt_vec_name, name_kwargs['fixed'].copy())
         if name_kwargs.get('thresh', True):
-            LQinv = param.var_dict[self._lt_prec_name]
+            LQinv = getattr(param, self._lt_prec_name)
+            LQinv[np.triu_indices_from(LQinv, 1)] = 0
             if np.any(np.diag(LQinv) < 0.0):
                 logger.info(
                     "Reflecting {0}: {1} < 0.0".format(
@@ -49,34 +75,37 @@ class CovarianceParamHelper(ParamHelper):
                     )
                 LQinv[:] = np.linalg.cholesky(
                     np.dot(LQinv, LQinv.T) + \
-                            np.eye(param.dim[self.dim_names[0]])*1e-9
+                            np.eye(param.dim[self.dim_names[0]])*1e-16
                     )
-            param.var_dict[self._lt_prec_name] = LQinv
-
-        if name_kwargs.get('fixed') is not None:
-            param.var_dict[self._lt_prec_name] = name_kwargs['fixed'].copy()
+            setattr(param, self._lt_prec_name, LQinv)
         return
 
     def from_dict_to_vector(self, vector_list, var_dict, **kwargs):
-        LQinv = var_dict[self._lt_prec_name]
-        if np.isscalar(LQinv):
-            vector_list.append([LQinv])
+        LQinv_vec = var_dict[self._lt_vec_name]
+        if np.isscalar(LQinv_vec):
+            vector_list.append([LQinv_vec])
         else:
-            vector_list.append(LQinv[np.tril_indices_from(LQinv)])
+            vector_list.append(LQinv_vec)
         return
 
     def from_vector_to_dict(self, var_dict, vector, vector_index, **kwargs):
         n = kwargs[self.dim_names[0]]
-        LQinv = np.zeros((n, n))
-        LQinv[np.tril_indices(n)] = vector[vector_index:vector_index+(n+1)*n//2]
-        var_dict[self._lt_prec_name] = LQinv
+        LQinv_vec = np.zeros((n+1)*n//2)
+        LQinv_vec = vector[vector_index:vector_index+(n+1)*n//2]
+        var_dict[self._lt_vec_name] = LQinv_vec
         return vector_index+(n+1)*n//2
 
     def get_properties(self):
         properties = {}
+        properties[self._lt_vec_name] = property(
+                fget=get_value_func(self._lt_vec_name),
+                fset=set_value_func(self._lt_vec_name),
+                doc="{0} is a ({1}+1){1}/2 vector of lower tri matrix".format(
+                    self._lt_vec_name, self.dim_names[0]),
+                )
         properties[self._lt_prec_name] = property(
-                fget=get_value_func(self._lt_prec_name),
-                fset=set_value_func(self._lt_prec_name),
+                fget=get_LQinv_func(self.name),
+                fset=set_LQinv_func(self.name),
                 doc="{0} is a {1} by {1} lower triangular matrix".format(
                     self._lt_prec_name, self.dim_names[0]),
                 )
@@ -96,10 +125,23 @@ class CovarianceParamHelper(ParamHelper):
                     )
         return properties
 
+def get_LQinv_func(name):
+    def fget(self):
+        LQinv = tril_vector_to_mat(getattr(self, "L{0}inv_vec".format(name)))
+        return LQinv
+    return fget
+
+def set_LQinv_func(name):
+    def fset(self, value):
+        LQinv_vec = value[np.tril_indices_from(value)]
+        self.var_dict["L{0}inv_vec".format(name)] = LQinv_vec
+        return
+    return fset
+
 def get_Qinv_func(name):
     def fget(self):
         LQinv = getattr(self, "L{0}inv".format(name))
-        Qinv = LQinv.dot(LQinv.T) + 1e-9*np.eye(LQinv.shape[0])
+        Qinv = LQinv.dot(LQinv.T) + 1e-16*np.eye(LQinv.shape[0])
         return Qinv
     return fget
 
@@ -120,6 +162,7 @@ class CovariancePriorHelper(PriorHelper):
         self._df_name = 'df_{0}inv'.format(name)
         self._inv_name = '{0}inv'.format(name)
         self._lt_prec_name = 'L{0}inv'.format(name)
+        self._lt_vec_name = 'L{0}inv_vec'.format(name)
         self.dim_names = ['n'] if dim_names is None else dim_names
         self.matrix_name = matrix_name
         return
@@ -146,7 +189,7 @@ class CovariancePriorHelper(PriorHelper):
 
         Qinv = array_wishart_rvs(df=df_Qinv, scale=scale_Qinv)
         LQinv = np.linalg.cholesky(Qinv)
-        var_dict[self._lt_prec_name] = LQinv
+        var_dict[self._lt_vec_name] = LQinv[np.tril_indices_from(LQinv)]
         return
 
     def _get_matrix_hyperparam(self, prior):
@@ -180,10 +223,10 @@ class CovariancePriorHelper(PriorHelper):
             Qinv = array_wishart_rvs(df=df_Q, scale=scale_Qinv)
         else:
             S_prevprev = \
-                np.diag(prec) + sufficient_stat[self.name]['S_prevprev']
+                prec + sufficient_stat[self.name]['S_prevprev']
             S_curprev = \
                 mean_prec + sufficient_stat[self.name]['S_curprev']
-            S_curcur =  np.matmul(mean, mean_prec) + \
+            S_curcur =  np.matmul(mean, mean_prec.T) + \
                     sufficient_stat[self.name]['S_curcur']
             S_schur = S_curcur - np.matmul(S_curprev,
                     np.linalg.solve(S_prevprev, S_curprev.T))
@@ -193,7 +236,7 @@ class CovariancePriorHelper(PriorHelper):
             Qinv = array_wishart_rvs(df=df_Q, scale=scale_Qinv)
 
         LQinv = np.linalg.cholesky(Qinv)
-        var_dict[self._lt_prec_name] = LQinv
+        var_dict[self._lt_vec_name] = LQinv[np.tril_indices_from(LQinv)]
         return
 
     def logprior(self, prior, logprior, parameters, **kwargs):
@@ -213,8 +256,7 @@ class CovariancePriorHelper(PriorHelper):
         grad_LQinv = \
             (df_Qinv - LQinv.shape[0] - 1) * np.linalg.inv(LQinv.T) - \
             np.linalg.solve(scale_Qinv, LQinv)
-        grad_LQinv[np.triu_indices_from(LQinv, 1)] = 0
-        grad[self._lt_prec_name] = grad_LQinv
+        grad[self._lt_vec_name] = grad_LQinv[np.tril_indices_from(grad_LQinv)]
         return
 
     def get_prior_kwargs(self, prior_kwargs, parameters, **kwargs):
@@ -245,30 +287,33 @@ class CovariancePrecondHelper(PrecondHelper):
     def __init__(self, name='Q', dim_names=None):
         self.name = name
         self._inv_name = '{0}inv'.format(name)
-        self._lt_prec_name = 'L{0}inv'.format(name)
+        self._lt_vec_name = 'L{0}inv_vec'.format(name)
         self.dim_names = ['n'] if dim_names is None else dim_names
         return
 
     def precondition(self, preconditioner,
             precond_grad, grad, parameters, **kwargs):
         Qinv = getattr(parameters, self._inv_name)
-        grad[self._lt_prec_name][np.triu_indices_from(Qinv, 1)] = 0
-        precond_grad[self._lt_prec_name] = np.dot(0.5*Qinv,
-                grad[self._lt_prec_name])
+        LQinv_grad = np.zeros(Qinv.shape)
+        LQinv_grad[np.tril_indices_from(LQinv_grad)] = grad[self._lt_vec_name]
+        precond_LQinv = np.dot(0.5*Qinv, LQinv_grad)
+        precond_grad[self._lt_vec_name] = \
+                precond_LQinv[np.tril_indices_from(precond_LQinv)]
         return
 
     def precondition_noise(self, preconditioner,
             noise, parameters, **kwargs):
-        LQinv = getattr(parameters, self._lt_prec_name)
-        noise[self._lt_prec_name] = np.dot(np.sqrt(0.5)*LQinv,
+        LQinv = tril_vector_to_mat(getattr(parameters, self._lt_vec_name))
+        LQinv_noise = np.dot(np.sqrt(0.5)*LQinv,
                 np.random.normal(loc=0, size=LQinv.shape)
                 )
-        noise[self._lt_prec_name][np.triu_indices_from(LQinv, 1)] = 0
+        noise[self._lt_vec_name] = LQinv_noise[np.tril_indices_from(LQinv_noise)]
         return
 
     def correction_term(self, preconditioner, correction, parameters, **kwargs):
-        LQinv = getattr(parameters, self._lt_prec_name)
-        correction[self._lt_prec_name] = 0.5 * (LQinv.shape[0]+1) * LQinv
+        LQinv_vec = getattr(parameters, self._lt_vec_name)
+        n = int(np.sqrt(len(LQinv_vec)*2))
+        correction[self._lt_vec_name] = 0.5 * (n+1) * LQinv_vec
         return
 
 
@@ -277,21 +322,47 @@ class CovariancesParamHelper(ParamHelper):
     def __init__(self, name='Q', dim_names=None):
         self.name = name
         self._lt_prec_name = 'L{}inv'.format(name)
+        self._lt_vec_name = 'L{}inv_vec'.format(name)
         self._inv_name = '{}inv'.format(name)
         self.dim_names = ['n', 'num_states'] if dim_names is None else dim_names
         return
 
     def set_var(self, param, **kwargs):
-        if self._lt_prec_name in kwargs:
+        # Handle kwargs input
+        if self._lt_vec_name in kwargs:
+            # LQinv_vec
+            LQinv_vec = np.array(kwargs[self._lt_vec_name]).astype(float)
+            num_states, L = np.shape(LQinv_vec)
+            n = int(np.sqrt(L*2))
+            param.var_dict[self._lt_vec_name] = LQinv_vec
+            param._set_check_dim(**{
+                self.dim_names[0]: n,
+                self.dim_names[1]: num_states,
+                })
+        elif self._lt_prec_name in kwargs:
+            # LQinv
             num_states, n, n2 = np.shape(kwargs[self._lt_prec_name])
             if n != n2:
                 raise ValueError("{} must be square matrix".format(
                     self._lt_prec_name))
             LQinv = np.array(kwargs[self._lt_prec_name]).astype(float)
-            for LQinv_k in LQinv:
-                LQinv_k[np.triu_indices_from(LQinv_k, 1)] = 0.0 # zero upper tri
+            setattr(param, self._lt_prec_name, LQinv)
+            param._set_check_dim(**{
+                self.dim_names[0]: n,
+                self.dim_names[1]: num_states,
+                })
 
-            param.var_dict[self._lt_prec_name] = LQinv
+        elif self.name in kwargs:
+            # Q
+            num_states, n, n2 = np.shape(kwargs[self.name])
+            if n != n2:
+                raise ValueError("{} must be square matrix".format(
+                    self.name))
+            Q = np.array(kwargs[self.name]).astype(float)
+            LQinv = np.array([
+                np.linalg.cholesky(np.linalg.inv(Q_k)) for Q_k in Q
+                ])
+            setattr(param, self._lt_prec_name, LQinv)
             param._set_check_dim(**{
                 self.dim_names[0]: n,
                 self.dim_names[1]: num_states,
@@ -302,8 +373,10 @@ class CovariancesParamHelper(ParamHelper):
 
     def project_parameters(self, param, **kwargs):
         name_kwargs = kwargs.get(self.name, {})
+        if name_kwargs.get('fixed') is not None:
+            setattr(param, self._lt_prec_name, name_kwargs['fixed'].copy())
         if name_kwargs.get('thresh', True):
-            LQinv = param.var_dict[self._lt_prec_name]
+            LQinv = getattr(param, self._lt_prec_name)
             for k, LQinv_k in enumerate(LQinv):
                 if np.any(np.diag(LQinv_k) < 0.0):
                     logger.info(
@@ -312,35 +385,37 @@ class CovariancesParamHelper(ParamHelper):
                         )
                     LQinv_k[:] = np.linalg.cholesky(
                         np.dot(LQinv_k, LQinv_k.T) + \
-                                np.eye(param.dim[self.dim_names[0]])*1e-9
+                                np.eye(param.dim[self.dim_names[0]])*1e-16
                         )
-            param.var_dict[self._lt_prec_name] = LQinv
-        if name_kwargs.get('fixed') is not None:
-            param.var_dict[self._lt_prec_name] = name_kwargs['fixed'].copy()
+            setattr(param, self._lt_prec_name, LQinv)
         return
 
     def from_dict_to_vector(self, vector_list, var_dict, **kwargs):
-        LQinv = var_dict[self._lt_prec_name]
-        vector_list.extend([LQinv_k[np.tril_indices_from(LQinv_k)]
-            for LQinv_k in LQinv])
+        LQinv_vec = var_dict[self._lt_vec_name]
+        vector_list.extend([LQinv_vec_k for LQinv_vec_k in LQinv_vec])
         return
 
     def from_vector_to_dict(self, var_dict, vector, vector_index, **kwargs):
         n = kwargs[self.dim_names[0]]
         num_states = kwargs[self.dim_names[1]]
-        LQinv = np.zeros((num_states, n, n))
+        LQinv_vec = np.zeros((num_states, (n+1)*n//2))
         for k in range(num_states):
-            LQinv[k][np.tril_indices(n)] = \
-                    vector[vector_index + k*(n+1)*n//2:
-                           vector_index + (k+1)*(n+1)*n//2]
-        var_dict[self._lt_prec_name] = LQinv
+            LQinv_vec[k] = vector[vector_index + k*(n+1)*n//2:
+                                  vector_index + (k+1)*(n+1)*n//2]
+        var_dict[self._lt_vec_name] = LQinv_vec
         return vector_index+num_states*(n+1)*n//2
 
     def get_properties(self):
         properties = {}
+        properties[self._lt_vec_name] = property(
+                fget=get_value_func(self._lt_vec_name),
+                fset=set_value_func(self._lt_vec_name),
+                doc="{0} is {2} of ({1}+1)*{1}/2 lower tri mat vectors".format(
+                    self._lt_vec_name, self.dim_names[0], self.dim_names[1]),
+                )
         properties[self._lt_prec_name] = property(
-                fget=get_value_func(self._lt_prec_name),
-                fset=set_value_func(self._lt_prec_name),
+                fget=get_LQinvs_func(self.name),
+                fset=set_LQinvs_func(self.name),
                 doc="{0} is {2} of {1} by {1} lower triangular matrices".format(
                     self._lt_prec_name, self.dim_names[0], self.dim_names[1]),
                 )
@@ -360,10 +435,28 @@ class CovariancesParamHelper(ParamHelper):
                     )
         return properties
 
+def get_LQinvs_func(name):
+    def fget(self):
+        LQinv_vec = getattr(self, "L{0}inv_vec".format(name))
+        LQinv = np.array([tril_vector_to_mat(LQinv_vec_k)
+            for LQinv_vec_k in LQinv_vec])
+        return LQinv
+    return fget
+
+def set_LQinvs_func(name):
+    def fset(self, value):
+        LQinv_vec = np.array([
+            LQinv_k[np.tril_indices_from(LQinv_k)]
+            for LQinv_k in value
+            ])
+        self.var_dict["L{0}inv_vec".format(name)] = LQinv_vec
+        return
+    return fset
+
 def get_Qinvs_func(name):
     def fget(self):
         LQinv = getattr(self, "L{0}inv".format(name))
-        Qinv = np.array([LQinv_k.dot(LQinv_k.T) + 1e-9*np.eye(LQinv_k.shape[0])
+        Qinv = np.array([LQinv_k.dot(LQinv_k.T) + 1e-16*np.eye(LQinv_k.shape[0])
             for LQinv_k in LQinv])
         return Qinv
     return fget
@@ -384,7 +477,7 @@ class CovariancesPriorHelper(PriorHelper):
         self._scale_name = 'scale_{0}inv'.format(name)
         self._df_name = 'df_{0}inv'.format(name)
         self._inv_name = '{0}inv'.format(name)
-        self._lt_prec_name = 'L{0}inv'.format(name)
+        self._lt_vec_name = 'L{0}inv_vec'.format(name)
         self.dim_names = ['n', 'num_states'] if dim_names is None else dim_names
         self.matrix_name = matrix_name
         return
@@ -418,8 +511,10 @@ class CovariancesPriorHelper(PriorHelper):
 
         Qinvs = [array_wishart_rvs(df=df_Qinv_k, scale=scale_Qinv_k)
                 for df_Qinv_k, scale_Qinv_k in zip(df_Qinv, scale_Qinv)]
-        LQinv = np.array([np.linalg.cholesky(Qinv_k) for Qinv_k in Qinvs])
-        var_dict[self._lt_prec_name] = LQinv
+        LQinv_vec = np.array([
+            np.linalg.cholesky(Qinv_k)[np.tril_indices_from(Qinv_k)]
+            for Qinv_k in Qinvs])
+        var_dict[self._lt_vec_name] = LQinv_vec
         return
 
     def _get_matrix_hyperparam(self, prior):
@@ -467,8 +562,10 @@ class CovariancesPriorHelper(PriorHelper):
                     np.linalg.inv(np.linalg.inv(scale_Qinv[k]) + S_schur)
                 Qinvs[k] = array_wishart_rvs(df=df_Q_k, scale=scale_Qinv_k)
 
-        LQinv = np.array([np.linalg.cholesky(Qinv_k) for Qinv_k in Qinvs])
-        var_dict[self._lt_prec_name] = LQinv
+        LQinv_vec = np.array([
+            np.linalg.cholesky(Qinv_k)[np.tril_indices_from(Qinv_k)]
+            for Qinv_k in Qinvs])
+        var_dict[self._lt_vec_name] = LQinv_vec
         return
 
     def logprior(self, prior, logprior, parameters, **kwargs):
@@ -486,16 +583,18 @@ class CovariancesPriorHelper(PriorHelper):
     def grad_logprior(self, prior, grad, parameters, **kwargs):
         scale_Qinv = prior.hyperparams[self._scale_name]
         df_Qinv = prior.hyperparams[self._df_name]
-        LQinv = getattr(parameters, self._lt_prec_name)
+        LQinv = np.array([tril_vector_to_mat(LQinv_vec_k)
+            for LQinv_vec_k in getattr(parameters, self._lt_vec_name)])
         grad_LQinv = np.array([
             (df_Qinv_k - LQinv.shape[1] - 1) * np.linalg.inv(LQinv_k.T) - \
             np.linalg.solve(scale_Qinv_k, LQinv_k)
              for LQinv_k, df_Qinv_k, scale_Qinv_k in zip(
                  LQinv, df_Qinv, scale_Qinv)
              ])
-        for grad_LQinv_k in grad_LQinv:
-            grad_LQinv_k[np.triu_indices_from(grad_LQinv_k, 1)] = 0
-        grad[self._lt_prec_name] = grad_LQinv
+        grad_LQinv_vec = np.array([
+            grad_LQinv_k[np.tril_indices_from(grad_LQinv_k)]
+            for grad_LQinv_k in grad_LQinv])
+        grad[self._lt_vec_name] = grad_LQinv_vec
         return
 
     def get_prior_kwargs(self, prior_kwargs, parameters, **kwargs):
@@ -529,38 +628,42 @@ class CovariancesPrecondHelper(PrecondHelper):
     def __init__(self, name='Q', dim_names=None):
         self.name = name
         self._inv_name = '{0}inv'.format(name)
-        self._lt_prec_name = 'L{0}inv'.format(name)
+        self._lt_vec_name = 'L{0}inv_vec'.format(name)
         self.dim_names = ['n', 'num_states'] if dim_names is None else dim_names
         return
 
     def precondition(self, preconditioner,
             precond_grad, grad, parameters, **kwargs):
         Qinv = getattr(parameters, self._inv_name)
-        num_states = Qinv.shape[0]
+        num_states, n, _ = Qinv.shape
+        precond_LQinv_vec = np.zeros((num_states, (n+1)*n//2))
         for k in range(num_states):
-            grad[self._lt_prec_name][k][np.triu_indices_from(Qinv[k], 1)] = 0
-        precond_grad[self._lt_prec_name] = np.array([
-            np.dot(0.5*Qinv[k], grad[self._lt_prec_name][k])
-            for k in range(num_states)
-            ])
+            LQinv_grad_k = np.zeros((n,n))
+            LQinv_grad_k[np.tril_indices(n)] = grad[self._lt_vec_name][k]
+            precond_LQinv_k = np.dot(0.5*Qinv[k], LQinv_grad_k)
+            precond_LQinv_vec[k] = precond_LQinv_k[np.tril_indices(n)]
+        precond_grad[self._lt_vec_name] = precond_LQinv_vec
         return
 
     def precondition_noise(self, preconditioner,
             noise, parameters, **kwargs):
-        LQinv = getattr(parameters, self._lt_prec_name)
-        noise[self._lt_prec_name] = np.array([
+        LQinv = np.array([tril_vector_to_mat(LQinv_vec_k)
+            for LQinv_vec_k in getattr(parameters, self._lt_vec_name)])
+        num_states, n, _ = LQinv.shape
+        LQinv_noise = np.array([
             np.dot(np.sqrt(0.5)*LQinv[k],
-                np.random.normal(loc=0, size=(LQinv.shape[1], LQinv.shape[1]))
+                np.random.normal(loc=0, size=(n, n))
                 )
-            for k in range(LQinv.shape[0])
+            for k in range(num_states)
         ])
-        for noise_k in noise[self._lt_prec_name]:
-            noise_k[np.triu_indices_from(noise_k, 1)] = 0
+        noise[self._lt_vec_name] = np.array([LQinv_noise_k[np.tril_indices(n)]
+            for LQinv_noise_k in LQinv_noise])
         return
 
     def correction_term(self, preconditioner, correction, parameters, **kwargs):
-        LQinv = getattr(parameters, self._lt_prec_name)
-        correction[self._lt_prec_name] = 0.5 * (LQinv.shape[1]+1) * LQinv
+        LQinv_vec = getattr(parameters, self._lt_vec_name)
+        n = int(np.sqrt(np.shape(LQinv_vec)[1]*2))
+        correction[self._lt_vec_name] = 0.5 * (n+1) * LQinv_vec
         return
 
 

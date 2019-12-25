@@ -6,7 +6,8 @@ import seaborn as sns
 import logging
 logger = logging.getLogger(name=__name__)
 
-def plot_metrics(evaluator, full_trace=True, burnin=None):
+def plot_metrics(evaluator, full_trace=True, burnin=None,
+        x='iteration'):
     df = evaluator.get_metrics()
     df['variable:metric'] = df['variable']+':'+df['metric']
     if burnin is None:
@@ -17,11 +18,14 @@ def plot_metrics(evaluator, full_trace=True, burnin=None):
     df = df.sort_values(['variable:metric', 'iteration'])
     g = sns.FacetGrid(df, col='variable:metric',
             col_wrap=4, sharey=False).map(
-                plt.plot, 'iteration', 'value'
+                plt.plot, x, 'value'
                 ).add_legend().set_titles("{col_name}")
     return g
 
-def compare_metrics(evaluators, full_trace=True, burnin=None, errorband=False):
+def compare_metrics(evaluators, full_trace=True, burnin=None, errorband=False,
+        x='iteration'):
+
+    # Concat Evaluator Metrics
     if isinstance(next(iter(evaluators.keys())), tuple):
         df = pd.concat(
             [evaluator.get_metrics().assign(method=name, init=init)
@@ -35,6 +39,8 @@ def compare_metrics(evaluators, full_trace=True, burnin=None, errorband=False):
             ignore_index=True,
             )
     df['variable:metric'] = df['variable']+':'+df['metric']
+
+    # Subset Data
     if burnin is None:
         if not full_trace:
             min_iteration = min([evaluator.iteration
@@ -46,22 +52,23 @@ def compare_metrics(evaluators, full_trace=True, burnin=None, errorband=False):
 
     df = df.sort_values(['method', 'variable:metric', 'iteration'])
     if errorband:
+        # TODO set x to mean(x) when groupby iteration if x != iteration
         g = sns.FacetGrid(df, col='variable:metric', hue="method",
             col_wrap=4, sharey=False).map_dataframe(
-                sns.lineplot, x='iteration', y='value',
+                sns.lineplot, x=x, y='value',
                 estimator='mean', ci='sd',
                 )
     else:
         g = sns.FacetGrid(df, col='variable:metric', hue="method",
             col_wrap=4, sharey=False).map_dataframe(
-                sns.lineplot, x='iteration', y='value',
+                sns.lineplot, x=x, y='value',
                 units='init', estimator=None, ci=None,
                 )
-    g = g.add_legend().set_titles("{col_name}").set_xlabels("iteration")
+    g = g.add_legend().set_titles("{col_name}").set_xlabels(x)
     return g
 
 def plot_trace_plot(evaluator, full_trace=True, query_string=None,
-        single_variables=[], burnin=None):
+        single_variables=[], burnin=None, x='iteration'):
     samples_df = evaluator.get_samples()
     if burnin is None:
         if not full_trace:
@@ -71,9 +78,9 @@ def plot_trace_plot(evaluator, full_trace=True, query_string=None,
     if query_string is not None:
         samples_df = samples_df.query(query_string)
     variables = samples_df['variable'].sort_values().unique()
-    iterations = samples_df['iteration'].sort_values().unique()
+    xs = samples_df[x].sort_values().unique()
     variable_values = {
-            key: np.array(df.sort_values('iteration')['value'].tolist())
+            key: np.array(df.sort_values(x)['value'].tolist())
             for key, df in samples_df.groupby('variable')
             }
 
@@ -93,12 +100,12 @@ def plot_trace_plot(evaluator, full_trace=True, query_string=None,
             if variable in single_variables:
                 values = np.reshape(values, (values.shape[0], -1))
                 for dim in range(values.shape[1]):
-                    ax.plot(iterations, values[:, dim],
+                    ax.plot(xs, values[:, dim],
                         label='{0}[{1}]'.format(variable, dim))
             else:
                 values = np.reshape(values, (values.shape[0], num_states, -1))
                 for dim in range(values.shape[2]):
-                    ax.plot(iterations, values[:, k, dim],
+                    ax.plot(xs, values[:, k, dim],
                             label='{0}[{1}]'.format(variable, dim))
             if k == num_states-1:
                 ax.legend()

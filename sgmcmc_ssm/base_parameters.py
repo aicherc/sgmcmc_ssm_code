@@ -258,11 +258,12 @@ class BasePreconditioner(object):
             precond_helper.set_preconditioner_vars(self, **kwargs)
         return
 
-    def precondition(self, grad, parameters, scale=1.0):
+    def precondition(self, grad, parameters, scale=1.0, **kwargs):
         """ Return dict with precondition gradients """
         precond_grad = {}
         for precond_helper in self._precond_helper_list:
-            precond_helper.precondition(self, precond_grad, grad, parameters)
+            precond_helper.precondition(self, precond_grad, grad, parameters,
+                    **kwargs)
         for var in precond_grad:
             precond_grad[var] *= scale
         return precond_grad

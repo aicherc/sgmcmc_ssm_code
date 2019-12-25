@@ -300,7 +300,7 @@ def get_logit_pi_func(pi_type_name, logit_pi_name, expanded_pi_name):
         if pi_type == 'logit':
             logit_pi = self.var_dict[logit_pi_name]
         elif pi_type == 'expanded':
-            logit_pi = np.log(np.abs(self.var_dict[expanded_pi_name]) + 1e-9)
+            logit_pi = np.log(np.abs(self.var_dict[expanded_pi_name]) + 1e-99)
             logit_pi -= np.outer(
                     np.mean(logit_pi, axis=1),
                     np.ones(logit_pi.shape[1])
@@ -397,7 +397,7 @@ class TransitionMatrixPriorHelper(PriorHelper):
         alpha = prior.hyperparams[self._alpha]
         pi = np.array([np.random.dirichlet(alpha_k) for alpha_k in alpha])
         if pi_type == 'logit':
-            var_dict[self._logit_name] = np.log(pi)
+            var_dict[self._logit_name] = np.log(pi+1e-99)
         elif pi_type == 'expanded':
             var_dict[self._expanded_name] = pi
         else:
@@ -411,7 +411,7 @@ class TransitionMatrixPriorHelper(PriorHelper):
                 sufficient_stat[self.name]['alpha']
         pi = np.array([np.random.dirichlet(alpha_k) for alpha_k in alpha])
         if pi_type == 'logit':
-            var_dict[self._logit_name] = np.log(pi)
+            var_dict[self._logit_name] = np.log(pi+1e-99)
         elif pi_type == 'expanded':
             var_dict[self._expanded_name] = pi
         else:
@@ -423,25 +423,33 @@ class TransitionMatrixPriorHelper(PriorHelper):
         alpha = prior.hyperparams[self._alpha]
         pi = getattr(parameters, self.name)
         for pi_k, alpha_k in zip(pi, alpha):
-            logprior += scipy.stats.dirichlet.logpdf(pi_k, alpha=alpha_k)
+            logprior += scipy.stats.dirichlet.logpdf(pi_k+1e-16, alpha=alpha_k)
         return logprior
 
-    def grad_logprior(self, prior, grad, parameters, **kwargs):
+    def grad_logprior(self, prior, grad, parameters, use_scir=False, **kwargs):
         pi_type = getattr(parameters, self._type_name)
         alpha = prior.hyperparams[self._alpha]
-        if pi_type == "logit":
-            grad[self._logit_name] = np.array([
-                -pi_k*np.sum(alpha_k-1.0) + (alpha_k-1.0)
-                for pi_k, alpha_k in zip(getattr(parameters, self.name), alpha)
-                ])
-        elif pi_type == "expanded":
-            grad[self._expanded_name] = np.array([
-                (-exp_pi_k*np.sum(alpha_k-1.0)/np.sum(exp_pi_k) + (alpha_k-1.0)) * exp_pi_k
-                for exp_pi_k, alpha_k in zip(
-                    getattr(parameters, self._expanded_name), alpha)
-                ])
+        if use_scir:
+            if pi_type == "logit":
+                grad[self._logit_name] = alpha
+            elif pi_type == "expanded":
+                grad[self._expanded_name] = alpha
         else:
-            RuntimeError("Unrecognized pi_type")
+            if pi_type == "logit":
+                grad[self._logit_name] = np.array([
+                    -pi_k*np.sum(alpha_k-1.0) + (alpha_k-1.0)
+                    for pi_k, alpha_k in zip(getattr(parameters, self.name),
+                        alpha)
+                    ])
+            elif pi_type == "expanded":
+                grad[self._expanded_name] = np.array([
+                    (-exp_pi_k*np.sum(alpha_k-1.0)/np.sum(exp_pi_k) + \
+                            (alpha_k-1.0)) * exp_pi_k
+                    for exp_pi_k, alpha_k in zip(
+                        getattr(parameters, self._expanded_name), alpha)
+                    ])
+            else:
+                RuntimeError("Unrecognized pi_type")
         return
 
     def get_prior_kwargs(self, prior_kwargs, parameters, **kwargs):
@@ -477,8 +485,12 @@ class TransitionMatrixPrecondHelper(PrecondHelper):
         if pi_type == 'logit':
             precond_grad[self._logit_name] = grad[self._logit_name]
         elif pi_type == 'expanded':
-            precond_grad[self._expanded_name] = (grad[self._expanded_name] *
-                    (1e-9 + np.abs(getattr(parameters, self._expanded_name))))
+            if kwargs.get('use_scir', False):
+                # Don't precondition if using SCIR
+                precond_grad[self._expanded_name] = grad[self._expanded_name]
+            else:
+                precond_grad[self._expanded_name] = (grad[self._expanded_name] *
+                    (1e-99 + np.abs(getattr(parameters, self._expanded_name))))
         else:
             raise RuntimeError("Unrecognized {0} {1}".format(
                 self._type_name, pi_type))
@@ -493,7 +505,7 @@ class TransitionMatrixPrecondHelper(PrecondHelper):
                     size=(num_states, num_states))
         elif pi_type == 'expanded':
             noise[self._expanded_name] = (
-                (1e-9 + np.abs(getattr(parameters, self._expanded_name)))**0.5 *
+                (1e-99 + np.abs(getattr(parameters, self._expanded_name)))**0.5 *
                 np.random.normal(loc=0, size=(num_states, num_states))
                 )
         else:

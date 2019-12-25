@@ -380,7 +380,7 @@ def noisy_logjoint_loglike_metric(metric_name_prefix='', **kwargs):
             ]
     return custom_metric_func
 
-def noisy_predictive_logjoint_loglike_metric(num_steps_ahead, kind='pf',
+def noisy_predictive_logjoint_loglike_metric(num_steps_ahead, kind='marginal',
         metric_name_prefix='', **kwargs):
     metric_names = [
         '{0}{1}_pred_loglikelihood'.format(metric_name_prefix, ii)
@@ -415,8 +415,6 @@ def noisy_predictive_logjoint_loglike_metric(num_steps_ahead, kind='pf',
                 ]
 
     return custom_metric_func
-
-
 
 def metric_compare_z(true_z):
     """ Return NMI, Precision, Recall between inferred and true discrete labels

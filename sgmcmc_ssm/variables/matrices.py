@@ -10,6 +10,7 @@ from .._utils import (
         matrix_normal_logpdf,
         pos_def_mat_inv,
         varp_stability_projection,
+        tril_vector_to_mat,
         )
 import logging
 logger = logging.getLogger(name=__name__)
@@ -70,7 +71,7 @@ class VectorPriorHelper(PriorHelper):
         self._mean_name = 'mean_{0}'.format(name)
         self._var_col_name = 'var_col_{0}'.format(name)
         self._var_row_name = var_row_name
-        self._lt_prec_name = 'L{0}inv'.format(var_row_name)
+        self._lt_vec_name = 'L{0}inv_vec'.format(var_row_name)
         self.dim_names = ['n'] if dim_names is None else dim_names
         return
 
@@ -93,12 +94,12 @@ class VectorPriorHelper(PriorHelper):
         mean_mu = prior.hyperparams[self._mean_name]
         var_col_mu = prior.hyperparams[self._var_col_name]
         if self._var_row_name is not None:
-            if self._lt_prec_name in var_dict:
-                LQinv = var_dict[self._lt_prec_name]
+            if self._lt_vec_name in var_dict:
+                LQinv = tril_vector_to_mat(var_dict[self._lt_vec_name])
                 Qinv = LQinv.dot(LQinv.T) + \
                         1e-9*np.eye(prior.dim[self.dim_names[0]])
             else:
-                raise ValueError("Missing {}\n".format(self._lt_prec_name) +
+                raise ValueError("Missing {}\n".format(self._lt_vec_name) +
                     "Perhaps {} must be earlier in _prior_helper_list".format(
                         self._var_row_name)
                         )
@@ -115,12 +116,12 @@ class VectorPriorHelper(PriorHelper):
         mean_mu = prior.hyperparams[self._mean_name]
         var_col_mu = prior.hyperparams[self._var_col_name]
         if self._var_row_name is not None:
-            if self._lt_prec_name in var_dict:
-                LQinv = var_dict[self._lt_prec_name]
+            if self._lt_vec_name in var_dict:
+                LQinv = tril_vector_to_mat(var_dict[self._lt_vec_name])
                 Qinv = LQinv.dot(LQinv.T) + \
                         1e-9*np.eye(prior.dim[self.dim_names[0]])
             else:
-                raise ValueError("Missing {}\n".format(self._lt_prec_name) +
+                raise ValueError("Missing {}\n".format(self._lt_vec_name) +
                     "Perhaps {} must be earlier in _prior_helper_list".format(
                         self._var_row_name)
                     )
@@ -142,7 +143,7 @@ class VectorPriorHelper(PriorHelper):
         mean_mu = prior.hyperparams[self._mean_name]
         var_col_mu = prior.hyperparams[self._var_col_name]
         if self._var_row_name is not None:
-            LQinv = parameters.var_dict[self._lt_prec_name]
+            LQinv = tril_vector_to_mat(parameters.var_dict[self._lt_vec_name])
         else:
             LQinv = np.eye(prior.dim[self.dim_names[0]])
         logprior += normal_logpdf(parameters.var_dict[self.name],
@@ -264,10 +265,10 @@ class VectorsParamHelper(ParamHelper):
 class VectorsPriorHelper(PriorHelper):
     def __init__(self, name='mu', dim_names=None, var_row_name=None):
         self.name = name
-        self._mean_name = 'mean_{0}'.format(name)
-        self._var_col_name = 'var_col_{0}'.format(name)
+        self._mean_name = 'mean_{0}'.format(name) # num_states by n
+        self._var_col_name = 'var_col_{0}'.format(name) # num_states by n
         self._var_row_name = var_row_name
-        self._lt_prec_name = 'L{0}inv'.format(var_row_name)
+        self._lt_vec_name = 'L{0}inv_vec'.format(var_row_name)
         self.dim_names = ['n', 'num_states'] if dim_names is None else dim_names
         return
 
@@ -294,13 +295,14 @@ class VectorsPriorHelper(PriorHelper):
         mean_mu = prior.hyperparams[self._mean_name]
         var_col_mu = prior.hyperparams[self._var_col_name]
         if self._var_row_name is not None:
-            if self._lt_prec_name in var_dict:
-                LQinvs = var_dict[self._lt_prec_name]
+            if self._lt_vec_name in var_dict:
+                LQinvs = np.array([tril_vector_to_mat(LQinv_vec_k)
+                    for LQinv_vec_k in var_dict[self._lt_vec_name]])
                 Qinvs = np.array([LQinv_k.dot(LQinv_k.T) + \
                         1e-9*np.eye(prior.dim[self.dim_names[0]])
                         for LQinv_k in LQinvs])
             else:
-                raise ValueError("Missing {}\n".format(self._lt_prec_name) +
+                raise ValueError("Missing {}\n".format(self._lt_vec_name) +
                     "Perhaps {} must be earlier in _prior_helper_list".format(
                         self._var_row_name)
                         )
@@ -320,22 +322,22 @@ class VectorsPriorHelper(PriorHelper):
     def sample_posterior(self, prior, var_dict, sufficient_stat, **kwargs):
         mean_mu = prior.hyperparams[self._mean_name]
         var_col_mu = prior.hyperparams[self._var_col_name]
+        num_states, n = np.shape(mean_mu)
         if self._var_row_name is not None:
-            if self._lt_prec_name in var_dict:
-                LQinvs = var_dict[self._lt_prec_name]
-                Qinvs = np.array([LQinv_k.dot(LQinv_k.T) + \
-                        1e-9*np.eye(prior.dim[self.dim_names[0]])
+            if self._lt_vec_name in var_dict:
+                LQinvs = np.array([tril_vector_to_mat(LQinv_vec_k)
+                    for LQinv_vec_k in var_dict[self._lt_vec_name]])
+                Qinvs = np.array([LQinv_k.dot(LQinv_k.T) + 1e-9*np.eye(n)
                         for LQinv_k in LQinvs])
             else:
-                raise ValueError("Missing {}\n".format(self._lt_prec_name) +
+                raise ValueError("Missing {}\n".format(self._lt_vec_name) +
                     "Perhaps {} must be earlier in _prior_helper_list".format(
                         self._var_row_name)
                     )
         else:
-            Qinvs = np.array([np.eye(prior.dim[self.dim_names[0]])
-                for _ in prior.dim[self.dim_names[1]]])
+            Qinvs = np.array([np.eye(n) for _ in range(num_states)])
 
-        mus = [None for k in range(prior.dim[self.dim_names[1]])]
+        mus = [None for k in range(num_states)]
         for k in range(len(mus)):
             S_prevprev = var_col_mu[k]**-1 + \
                     sufficient_stat[self.name]['S_prevprev'][k]
@@ -352,11 +354,13 @@ class VectorsPriorHelper(PriorHelper):
     def logprior(self, prior, logprior, parameters, **kwargs):
         mean_mu = prior.hyperparams[self._mean_name]
         var_col_mu = prior.hyperparams[self._var_col_name]
+        num_states, n = np.shape(mean_mu)
         if self._var_row_name is not None:
-            LQinvs = parameters.var_dict[self._lt_prec_name]
+            LQinvs = np.array([tril_vector_to_mat(LQinv_vec_k)
+                for LQinv_vec_k in parameters.var_dict[self._lt_vec_name]])
         else:
-            LQinvs = np.array([np.eye(prior.dim[self.dim_names[0]])
-                for _ in prior.dim[self.dim_names[1]]])
+            LQinvs = np.array([np.eye(n)
+                for _ in range(num_states)])
         for mu_k, mean_mu_k, var_col_mu_k, LQinv_k in zip(
                 parameters.var_dict[self.name], mean_mu, var_col_mu, LQinvs):
             logprior += normal_logpdf(mu_k,
@@ -369,16 +373,16 @@ class VectorsPriorHelper(PriorHelper):
         mu = parameters.var_dict[self.name]
         mean_mu = prior.hyperparams[self._mean_name]
         var_col_mu = prior.hyperparams[self._var_col_name]
+        num_states, n = np.shape(mean_mu)
         if self._var_row_name is not None:
             Qinvs = getattr(parameters, '{}inv'.format(self._var_row_name))
         else:
-            Qinvs = np.array([np.eye(prior.dim[self.dim_names[0]])
-                for _ in prior.dim[self.dim_names[1]]])
+            Qinvs = np.array([np.eye(n)
+                for _ in range(num_states)])
 
         grad[self.name] = np.array([
             -1.0 * np.dot(var_col_mu[k]**-1 * Qinvs[k], mu[k] - mean_mu[k])
-            for k in range(prior.dim[self.dim_names[1]])
-            ])
+            for k in range(num_states)])
         return
 
     def get_prior_kwargs(self, prior_kwargs, parameters, **kwargs):
@@ -502,7 +506,7 @@ class SquareMatrixPriorHelper(PriorHelper):
         self._mean_name = 'mean_{0}'.format(name)
         self._var_col_name = 'var_col_{0}'.format(name)
         self._var_row_name = var_row_name
-        self._lt_prec_name = 'L{0}inv'.format(var_row_name)
+        self._lt_vec_name = 'L{0}inv_vec'.format(var_row_name)
         self.dim_names = ['n'] if dim_names is None else dim_names
         return
 
@@ -530,12 +534,12 @@ class SquareMatrixPriorHelper(PriorHelper):
         mean_A = prior.hyperparams[self._mean_name]
         var_col_A = prior.hyperparams[self._var_col_name]
         if self._var_row_name is not None:
-            if self._lt_prec_name in var_dict:
-                LQinv = var_dict[self._lt_prec_name]
+            if self._lt_vec_name in var_dict:
+                LQinv = tril_vector_to_mat(var_dict[self._lt_vec_name])
                 Qinv = LQinv.dot(LQinv.T) + \
                         1e-9*np.eye(prior.dim[self.dim_names[0]])
             else:
-                raise ValueError("Missing {}\n".format(self._lt_prec_name) +
+                raise ValueError("Missing {}\n".format(self._lt_vec_name) +
                     "Perhaps {} must be earlier in _prior_helper_list".format(
                         self._var_row_name)
                         )
@@ -553,12 +557,12 @@ class SquareMatrixPriorHelper(PriorHelper):
         mean_A = prior.hyperparams[self._mean_name]
         var_col_A = prior.hyperparams[self._var_col_name]
         if self._var_row_name is not None:
-            if self._lt_prec_name in var_dict:
-                LQinv = var_dict[self._lt_prec_name]
+            if self._lt_vec_name in var_dict:
+                LQinv = tril_vector_to_mat(var_dict[self._lt_vec_name])
                 Qinv = LQinv.dot(LQinv.T) + \
                         1e-9*np.eye(prior.dim[self.dim_names[0]])
             else:
-                raise ValueError("Missing {}\n".format(self._lt_prec_name) +
+                raise ValueError("Missing {}\n".format(self._lt_vec_name) +
                     "Perhaps {} must be earlier in _prior_helper_list".format(
                         self._var_row_name)
                     )
@@ -580,7 +584,7 @@ class SquareMatrixPriorHelper(PriorHelper):
         mean_A = prior.hyperparams[self._mean_name]
         var_col_A = prior.hyperparams[self._var_col_name]
         if self._var_row_name is not None:
-            LQinv = parameters.var_dict[self._lt_prec_name]
+            LQinv = tril_vector_to_mat(parameters.var_dict[self._lt_vec_name])
         else:
             LQinv = np.eye(prior.dim[self.dim_names[0]])
         logprior += matrix_normal_logpdf(parameters.var_dict[self.name],
@@ -718,7 +722,7 @@ class SquareMatricesPriorHelper(PriorHelper):
         self._mean_name = 'mean_{0}'.format(name)
         self._var_col_name = 'var_col_{0}'.format(name)
         self._var_row_name = var_row_name
-        self._lt_prec_name = 'L{0}inv'.format(var_row_name)
+        self._lt_vec_name = 'L{0}inv_vec'.format(var_row_name)
         self.dim_names = ['n', 'num_states'] if dim_names is None else dim_names
         return
 
@@ -744,24 +748,25 @@ class SquareMatricesPriorHelper(PriorHelper):
         return
 
     def sample_prior(self, prior, var_dict, **kwargs):
+        n = prior.dim[self.dim_names[0]]
+        num_states = prior.dim[self.dim_names[1]]
         mean_A = prior.hyperparams[self._mean_name]
         var_col_A = prior.hyperparams[self._var_col_name]
         if self._var_row_name is not None:
-            if self._lt_prec_name in var_dict:
-                LQinvs = var_dict[self._lt_prec_name]
-                Qinvs = np.array([LQinv_k.dot(LQinv_k.T) + \
-                        1e-9*np.eye(prior.dim[self.dim_names[0]])
+            if self._lt_vec_name in var_dict:
+                LQinvs = np.array([tril_vector_to_mat(LQinv_vec_k)
+                    for LQinv_vec_k in var_dict[self._lt_vec_name]])
+                Qinvs = np.array([LQinv_k.dot(LQinv_k.T) + 1e-9*np.eye(n)
                         for LQinv_k in LQinvs])
             else:
-                raise ValueError("Missing {}\n".format(self._lt_prec_name) +
+                raise ValueError("Missing {}\n".format(self._lt_vec_name) +
                     "Perhaps {} must be earlier in _prior_helper_list".format(
                         self._var_row_name)
                         )
         else:
-            Qinvs = np.array([np.eye(prior.dim[self.dim_names[0]])
-                for _ in prior.dim[self.dim_names[1]]])
+            Qinvs = np.array([np.eye(n) for _ in range(num_states)])
 
-        As = [None for k in range(prior.dim[self.dim_names[1]])]
+        As = [None for k in range(num_states)]
         for k in range(len(As)):
             As[k] = scipy.stats.matrix_normal(
                 mean=mean_A[k],
@@ -772,24 +777,25 @@ class SquareMatricesPriorHelper(PriorHelper):
         return
 
     def sample_posterior(self, prior, var_dict, sufficient_stat, **kwargs):
+        n = prior.dim[self.dim_names[0]]
+        num_states = prior.dim[self.dim_names[1]]
         mean_A = prior.hyperparams[self._mean_name]
         var_col_A = prior.hyperparams[self._var_col_name]
         if self._var_row_name is not None:
-            if self._lt_prec_name in var_dict:
-                LQinvs = var_dict[self._lt_prec_name]
-                Qinvs = np.array([LQinv_k.dot(LQinv_k.T) + \
-                        1e-9*np.eye(prior.dim[self.dim_names[0]])
+            if self._lt_vec_name in var_dict:
+                LQinvs = np.array([tril_vector_to_mat(LQinv_vec_k)
+                    for LQinv_vec_k in var_dict[self._lt_vec_name]])
+                Qinvs = np.array([LQinv_k.dot(LQinv_k.T) + 1e-9*np.eye(n)
                         for LQinv_k in LQinvs])
             else:
-                raise ValueError("Missing {}\n".format(self._lt_prec_name) +
+                raise ValueError("Missing {}\n".format(self._lt_vec_name) +
                     "Perhaps {} must be earlier in _prior_helper_list".format(
                         self._var_row_name)
                     )
         else:
-            Qinvs = np.array([np.eye(prior.dim[self.dim_names[0]])
-                for _ in prior.dim[self.dim_names[1]]])
+            Qinvs = np.array([np.eye(n) for _ in range(num_states)])
 
-        As = [None for k in range(prior.dim[self.dim_names[1]])]
+        As = [None for k in range(num_states)]
         for k in range(len(As)):
             S_prevprev = np.diag(var_col_A[k]**-1) + \
                     sufficient_stat[self.name]['S_prevprev'][k]
@@ -804,13 +810,16 @@ class SquareMatricesPriorHelper(PriorHelper):
         return
 
     def logprior(self, prior, logprior, parameters, **kwargs):
+        n = prior.dim[self.dim_names[0]]
+        num_states = prior.dim[self.dim_names[1]]
         mean_A = prior.hyperparams[self._mean_name]
         var_col_A = prior.hyperparams[self._var_col_name]
         if self._var_row_name is not None:
-            LQinvs = parameters.var_dict[self._lt_prec_name]
+            LQinv_vec = getattr(parameters, self._lt_vec_name)
+            LQinvs = np.array([tril_vector_to_mat(LQinv_vec_k)
+                for LQinv_vec_k in LQinv_vec])
         else:
-            LQinvs = np.array([np.eye(prior.dim[self.dim_names[0]])
-                for _ in prior.dim[self.dim_names[1]]])
+            LQinvs = np.array([np.eye(n) for _ in range(num_states)])
         for A_k, mean_A_k, var_col_A_k, LQinv_k in zip(
                 parameters.var_dict[self.name], mean_A, var_col_A, LQinvs):
             logprior += matrix_normal_logpdf(A_k,
@@ -915,8 +924,21 @@ class RectMatrixParamHelper(ParamHelper):
 
     def project_parameters(self, param, **kwargs):
         name_kwargs = kwargs.get(self.name, {})
+        if name_kwargs.get('thresh', False):
+            A = param.var_dict[self.name]
+            A = varp_stability_projection(A,
+                    eigenvalue_cutoff=name_kwargs.get(
+                        'eigenvalue_cutoff', 0.9999),
+                    var_name=self.name,
+                    logger=logger)
+            param.var_dict[self.name] = A
         if name_kwargs.get('fixed') is not None:
             param.var_dict[self.name] = name_kwargs['fixed'].copy()
+        if name_kwargs.get('fixed_eye', False):
+            k = min(param.dim[self.dim_names[0]], param.dim[self.dim_names[1]])
+            A = param.var_dict[self.name]
+            A[0:k, 0:k] = np.eye(k)
+            param.var_dict[self.name] = A
         return
 
     def from_dict_to_vector(self, vector_list, var_dict, **kwargs):
@@ -950,7 +972,7 @@ class RectMatrixPriorHelper(PriorHelper):
         self._mean_name = 'mean_{0}'.format(name) # m by n ndarray
         self._var_col_name = 'var_col_{0}'.format(name) # n ndarray
         self._var_row_name = var_row_name
-        self._lt_prec_name = 'L{0}inv'.format(var_row_name) # m by m ndarray
+        self._lt_vec_name = 'L{0}inv_vec'.format(var_row_name) # m by m ndarray
         self.dim_names = ['m', 'n'] if dim_names is None else dim_names
         return
 
@@ -978,12 +1000,12 @@ class RectMatrixPriorHelper(PriorHelper):
         mean_A = prior.hyperparams[self._mean_name]
         var_col_A = prior.hyperparams[self._var_col_name]
         if self._var_row_name is not None:
-            if self._lt_prec_name in var_dict:
-                LQinv = var_dict[self._lt_prec_name]
+            if self._lt_vec_name in var_dict:
+                LQinv = tril_vector_to_mat(var_dict[self._lt_vec_name])
                 Qinv = LQinv.dot(LQinv.T) + \
                         1e-9*np.eye(prior.dim[self.dim_names[0]])
             else:
-                raise ValueError("Missing {}\n".format(self._lt_prec_name) +
+                raise ValueError("Missing {}\n".format(self._lt_vec_name) +
                     "Perhaps {} must be earlier in _prior_helper_list".format(
                         self._var_row_name)
                         )
@@ -1001,12 +1023,12 @@ class RectMatrixPriorHelper(PriorHelper):
         mean_A = prior.hyperparams[self._mean_name]
         var_col_A = prior.hyperparams[self._var_col_name]
         if self._var_row_name is not None:
-            if self._lt_prec_name in var_dict:
-                LQinv = var_dict[self._lt_prec_name]
+            if self._lt_vec_name in var_dict:
+                LQinv = tril_vector_to_mat(var_dict[self._lt_vec_name])
                 Qinv = LQinv.dot(LQinv.T) + \
                         1e-9*np.eye(prior.dim[self.dim_names[0]])
             else:
-                raise ValueError("Missing {}\n".format(self._lt_prec_name) +
+                raise ValueError("Missing {}\n".format(self._lt_vec_name) +
                     "Perhaps {} must be earlier in _prior_helper_list".format(
                         self._var_row_name)
                     )
@@ -1028,7 +1050,7 @@ class RectMatrixPriorHelper(PriorHelper):
         mean_A = prior.hyperparams[self._mean_name]
         var_col_A = prior.hyperparams[self._var_col_name]
         if self._var_row_name is not None:
-            LQinv = parameters.var_dict[self._lt_prec_name]
+            LQinv = tril_vector_to_mat(parameters.var_dict[self._lt_vec_name])
         else:
             LQinv = np.eye(prior.dim[self.dim_names[0]])
         logprior += matrix_normal_logpdf(parameters.var_dict[self.name],
@@ -1125,8 +1147,25 @@ class RectMatricesParamHelper(ParamHelper):
 
     def project_parameters(self, param, **kwargs):
         name_kwargs = kwargs.get(self.name, {})
+        if name_kwargs.get('thresh', False):
+            A = param.var_dict[self.name]
+            for k, A_k in enumerate(A):
+                A_k = varp_stability_projection(A_k,
+                        eigenvalue_cutoff=name_kwargs.get(
+                            'eigenvalue_cutoff', 0.9999),
+                        var_name=self.name,
+                        logger=logger)
+                A[k] = A_k
+            param.var_dict[self.name] = A
         if name_kwargs.get('fixed') is not None:
             param.var_dict[self.name] = name_kwargs['fixed'].copy()
+        if name_kwargs.get('fixed_eye', False):
+            k = min(param.dim[self.dim_names[0]], param.dim[self.dim_names[1]])
+            A = param.var_dict[self.name]
+            for kk in range(self.num_states):
+                A[kk, 0:k, 0:k] = np.eye(k)
+            param.var_dict[self.name] = A
+
         return
 
     def from_dict_to_vector(self, vector_list, var_dict, **kwargs):
@@ -1163,7 +1202,7 @@ class RectMatricesPriorHelper(PriorHelper):
         self._mean_name = 'mean_{0}'.format(name) # num_states x m x n
         self._var_col_name = 'var_col_{0}'.format(name) # num_states x n
         self._var_row_name = var_row_name # num_states x m x m
-        self._lt_prec_name = 'L{0}inv'.format(var_row_name)
+        self._lt_vec_name = 'L{0}inv_vec'.format(var_row_name)
         self.dim_names = ['m', 'n', 'num_states'] \
                 if dim_names is None else dim_names
         return
@@ -1192,22 +1231,22 @@ class RectMatricesPriorHelper(PriorHelper):
     def sample_prior(self, prior, var_dict, **kwargs):
         mean_A = prior.hyperparams[self._mean_name]
         var_col_A = prior.hyperparams[self._var_col_name]
+        num_states, m, n = np.shape(mean_A)
         if self._var_row_name is not None:
-            if self._lt_prec_name in var_dict:
-                LQinvs = var_dict[self._lt_prec_name]
-                Qinvs = np.array([LQinv_k.dot(LQinv_k.T) + \
-                        1e-9*np.eye(prior.dim[self.dim_names[0]])
+            if self._lt_vec_name in var_dict:
+                LQinvs = np.array([tril_vector_to_mat(LQinv_vec_k)
+                    for LQinv_vec_k in var_dict[self._lt_vec_name]])
+                Qinvs = np.array([LQinv_k.dot(LQinv_k.T) + 1e-9*np.eye(m)
                         for LQinv_k in LQinvs])
             else:
-                raise ValueError("Missing {}\n".format(self._lt_prec_name) +
+                raise ValueError("Missing {}\n".format(self._lt_vec_name) +
                     "Perhaps {} must be earlier in _prior_helper_list".format(
                         self._var_row_name)
                         )
         else:
-            Qinvs = np.array([np.eye(prior.dim[self.dim_names[0]])
-                for _ in prior.dim[self.dim_names[2]]])
+            Qinvs = np.array([np.eye(m) for _ in range(num_states)])
 
-        As = [None for k in range(prior.dim[self.dim_names[2]])]
+        As = [None for k in range(num_states)]
         for k in range(len(As)):
             As[k] = scipy.stats.matrix_normal(
                 mean=mean_A[k],
@@ -1220,22 +1259,22 @@ class RectMatricesPriorHelper(PriorHelper):
     def sample_posterior(self, prior, var_dict, sufficient_stat, **kwargs):
         mean_A = prior.hyperparams[self._mean_name]
         var_col_A = prior.hyperparams[self._var_col_name]
+        num_states, m, n = np.shape(mean_A)
         if self._var_row_name is not None:
-            if self._lt_prec_name in var_dict:
-                LQinvs = var_dict[self._lt_prec_name]
-                Qinvs = np.array([LQinv_k.dot(LQinv_k.T) + \
-                        1e-9*np.eye(prior.dim[self.dim_names[0]])
+            if self._lt_vec_name in var_dict:
+                LQinvs = np.array([tril_vector_to_mat(LQinv_vec_k)
+                    for LQinv_vec_k in var_dict[self._lt_vec_name]])
+                Qinvs = np.array([LQinv_k.dot(LQinv_k.T) + 1e-9*np.eye(m)
                         for LQinv_k in LQinvs])
             else:
-                raise ValueError("Missing {}\n".format(self._lt_prec_name) +
+                raise ValueError("Missing {}\n".format(self._lt_vec_name) +
                     "Perhaps {} must be earlier in _prior_helper_list".format(
                         self._var_row_name)
                     )
         else:
-            Qinvs = np.array([np.eye(prior.dim[self.dim_names[0]])
-                for _ in prior.dim[self.dim_names[2]]])
+            Qinvs = np.array([np.eye(m) for _ in range(num_states)])
 
-        As = [None for k in range(prior.dim[self.dim_names[2]])]
+        As = [None for k in range(num_states)]
         for k in range(len(As)):
             S_prevprev = np.diag(var_col_A[k]**-1) + \
                     sufficient_stat[self.name]['S_prevprev'][k]
@@ -1252,11 +1291,12 @@ class RectMatricesPriorHelper(PriorHelper):
     def logprior(self, prior, logprior, parameters, **kwargs):
         mean_A = prior.hyperparams[self._mean_name]
         var_col_A = prior.hyperparams[self._var_col_name]
+        num_states, m, n = np.shape(mean_A)
         if self._var_row_name is not None:
-            LQinvs = parameters.var_dict[self._lt_prec_name]
+            LQinvs = np.array([tril_vector_to_mat(LQinv_vec_k)
+                    for LQinv_vec_k in parameters.var_dict[self._lt_vec_name]])
         else:
-            LQinvs = np.array([np.eye(prior.dim[self.dim_names[0]])
-                for _ in prior.dim[self.dim_names[2]]])
+            LQinvs = np.array([np.eye(m) for _ in range(num_states)])
         for A_k, mean_A_k, var_col_A_k, LQinv_k in zip(
                 parameters.var_dict[self.name], mean_A, var_col_A, LQinvs):
             logprior += matrix_normal_logpdf(A_k,
