@@ -290,7 +290,7 @@ class SGMCMCSampler(object):
     def _single_noisy_grad_loglikelihood(self, buffer_dict, kind='marginal',
             num_samples=None, observations=None, parameters=None, **kwargs):
         # buffer_dict is the output of _random_subsequence_and_buffers
-        observations = self._get_observations(observations)
+        observations = self._get_observations(observations, check_shape=False)
 
         if parameters is None:
             parameters = self.parameters
@@ -390,7 +390,7 @@ class SGMCMCSampler(object):
     def _noisy_grad_loglikelihood(self,
             subsequence_length=-1, minibatch_size=1, buffer_length=0,
             observations=None, buffer_dicts=None, **kwargs):
-        observations = self._get_observations(observations)
+        observations = self._get_observations(observations, check_shape=False)
 
         T = observations.shape[0]
 
@@ -1136,12 +1136,12 @@ class SGMCMCSampler(object):
     def _check_observation_shape(self, observations):
         return
 
-    def _get_observations(self, observations):
+    def _get_observations(self, observations, check_shape=True):
         if observations is None:
             observations = self.observations
             if observations is None:
                 raise ValueError("observations not specified")
-        else:
+        elif check_shape:
             self._check_observation_shape(observations)
         return observations
 
