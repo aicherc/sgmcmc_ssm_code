@@ -1,6 +1,6 @@
 import numpy as np
 from ...sgmcmc_sampler import SGMCMCSampler, SeqSGMCMCSampler
-from .parameters import SLDSPrior, SLDSParameters, SLDSPreconditioner,
+from .parameters import SLDSPrior, SLDSParameters, SLDSPreconditioner
 from .helper import SLDSHelper
 
 class SLDSSampler(SGMCMCSampler):
