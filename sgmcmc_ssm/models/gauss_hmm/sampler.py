@@ -186,7 +186,7 @@ class GaussHMMSampler(CIRSamplerMixin, SGMCMCSampler):
             parameters = self.parameters
         if observations is None:
             observations = self.observations
-        z_prob = self.message_helper.latent_var_marginal(
+        z_prob = self.message_helper.latent_var_distr(
                 observations=observations,
                 parameters=parameters,
                 forward_message=self.forward_message,
