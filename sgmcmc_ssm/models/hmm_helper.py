@@ -416,7 +416,7 @@ class CIRSamplerMixin(SGMCMCSampler):
         if var.startswith("logit_"):
             is_logit = True
             theta = getattr(self.parameters, "expanded_{0}".format(
-                var.strip("logit_")))
+                var.replace("logit_", "", 1)))
         elif var.startswith("expanded_"):
             is_logit = False
             theta = getattr(self.parameters, var)

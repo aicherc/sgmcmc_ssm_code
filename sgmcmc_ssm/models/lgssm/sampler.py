@@ -70,7 +70,7 @@ class LGSSMSampler(SGMCMCSampler):
     def sample_x(self, observations=None, parameters=None, tqdm=None,
             num_samples=None, **kwargs):
         """ Sample X """
-        return self.predict(target='latent', kind='analytic',
+        return self.predict(target='latent', kind='analytic', return_distr=False,
                 observations=observations, parameters=parameters,
                 num_samples=num_samples, tqdm=tqdm,
                 **kwargs,

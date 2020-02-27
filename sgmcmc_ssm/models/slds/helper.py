@@ -360,6 +360,8 @@ class SLDSHelper(SGMCMCHelper):
         # Gradients
         grad = {var: np.zeros_like(value)
                 for var, value in parameters.as_dict().items()}
+        grad['LQinv'] = np.zeros_like(parameters.LQinv)
+        grad['LRinv'] = np.zeros_like(parameters.LRinv)
 
         # Helper Constants
         Rinv = np.dot(LRinv, LRinv.T)
@@ -844,6 +846,8 @@ class SLDSHelper(SGMCMCHelper):
         # Gradients
         grad = {var: np.zeros_like(value)
                 for var, value in parameters.as_dict().items()}
+        grad['LQinv'] = np.zeros_like(parameters.LQinv)
+        grad['LRinv'] = np.zeros_like(parameters.LRinv)
 
         # Transition Gradients
         p_bar = zip(forward_messages[:-1], backward_messages[1:], observations, x)
@@ -1136,6 +1140,8 @@ class SLDSHelper(SGMCMCHelper):
         # Gradients
         grad = {var: np.zeros_like(value)
                 for var, value in parameters.as_dict().items()}
+        grad['LQinv'] = np.zeros_like(parameters.LQinv)
+        grad['LRinv'] = np.zeros_like(parameters.LRinv)
 
         # Latent State Gradients
         z_prev = forward_message.get('z_prev')

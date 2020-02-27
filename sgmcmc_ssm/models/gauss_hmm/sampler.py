@@ -3,11 +3,10 @@ import logging
 logger = logging.getLogger(name=__name__)
 
 from ...sgmcmc_sampler import SGMCMCSampler, SeqSGMCMCSampler
-from ..hmm_helper import CIRSamplerMixin
 from .parameters import GaussHMMParameters, GaussHMMPrior, GaussHMMPreconditioner
 from .helper import GaussHMMHelper
 
-class GaussHMMSampler(CIRSamplerMixin, SGMCMCSampler):
+class GaussHMMSampler(SGMCMCSampler):
     def __init__(self, num_states, m, observations=None, prior=None,
             parameters=None, forward_message=None, name="GaussHMMHelper",
             **kwargs):
@@ -35,10 +34,6 @@ class GaussHMMSampler(CIRSamplerMixin, SGMCMCSampler):
                 (optional, will sample from prior by default)
 
         """
-        # Check Shape
-        if np.shape(observations)[1] != self.m:
-            raise ValueError("observations second dimension does not match m")
-
         self.observations = observations
 
         if prior is None:
