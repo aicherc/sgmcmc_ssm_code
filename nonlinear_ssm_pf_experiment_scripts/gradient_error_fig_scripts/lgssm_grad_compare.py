@@ -23,7 +23,6 @@ import seaborn as sns
 
 
 ### Main Function
-
 def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=12345, save_dat=True):
     print("\n===========================================================")
     print("T = {0}, L = {4}, N_reps = {1}, N_trial={5}, pars = {2}, buffer_sizes = {3}".format(
@@ -44,9 +43,9 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
 
     def convert_gradient(grad_dict):
         return [
-            grad_dict['A'],
-            grad_dict['LQinv'],
-            grad_dict['LRinv'],
+            grad_dict['A'].item(),
+            grad_dict['LQinv_vec'].item(),
+            grad_dict['LRinv_vec'].item(),
             ]
 
     results_dfs = []
@@ -61,7 +60,7 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
         # Compute Exact (Full Buffered Gradient)
         start_time = time.time()
         full_buffer_gradients = [None]*10
-        pbar = tqdm(range(10))
+        pbar = tqdm(range(10), leave=False)
         pbar.set_description('Number of Reps')
         buffer_size = L
         forward_message = helper.forward_message(
@@ -98,27 +97,27 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
                 tqdm=tqdm,
             )
 
-            pbar = tqdm(range(N_reps))
+            pbar = tqdm(range(N_reps), leave=False)
             pbar.set_description('Number of Reps')
             for rep in pbar:
                 # Poyiadjis N Smoother
                 start_time = time.time()
                 pf_kwargs.update(N=100, pf="poyiadjis_N")
-                poy_estimate = convert_gradient(helper.pf_score_estimate(**pf_kwargs))
+                poy_estimate = convert_gradient(helper.pf_gradient_estimate(**pf_kwargs))
                 estimates['poyiadjis_100'].append(poy_estimate)
                 runtimes['poyiadjis_100'].append(time.time() - start_time)
 
                 # Poyiadjis N Smoother
                 start_time = time.time()
                 pf_kwargs.update(N=1000, pf="poyiadjis_N")
-                poy_estimate = convert_gradient(helper.pf_score_estimate(**pf_kwargs))
+                poy_estimate = convert_gradient(helper.pf_gradient_estimate(**pf_kwargs))
                 estimates['poyiadjis_1000'].append(poy_estimate)
                 runtimes['poyiadjis_1000'].append(time.time() - start_time)
 
                 # Poyiadjis N Smoother
                 start_time = time.time()
                 pf_kwargs.update(N=10000, pf="poyiadjis_N")
-                poy_estimate = convert_gradient(helper.pf_score_estimate(**pf_kwargs))
+                poy_estimate = convert_gradient(helper.pf_gradient_estimate(**pf_kwargs))
                 estimates['poyiadjis_10000'].append(poy_estimate)
                 runtimes['poyiadjis_10000'].append(time.time() - start_time)
 
@@ -239,6 +238,7 @@ if __name__ == "__main__":
             "./scratch/lgssm_grad_compare/",
             "{0}".format(tuple(pars)))
     make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out)
+    print("Plots are at {}".format(path_to_out))
 
 
 

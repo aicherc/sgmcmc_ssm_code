@@ -39,9 +39,9 @@ class GARCHParameters(BaseParameters):
     @property
     def tau(self):
         if self.m == 1:
-            tau = self.var_dict['LRinv'] ** -1
+            tau = self.LRinv ** -1
         else:
-            tau = np.linalg.inv(self.var_dict['LRinv'].T)
+            tau = np.linalg.inv(self.LRinv.T)
         return tau
 
     @staticmethod

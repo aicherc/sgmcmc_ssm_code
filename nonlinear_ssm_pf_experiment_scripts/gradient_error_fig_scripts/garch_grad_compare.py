@@ -52,7 +52,7 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
             grad_dict['log_mu'],
             grad_dict['logit_phi'],
             grad_dict['logit_lambduh'],
-            grad_dict['LRinv'],
+            grad_dict['LRinv_vec'],
             ]
 
     results_dfs = []
@@ -82,7 +82,7 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
         )
         for rep in pbar:
             full_buffer_gradients[rep] = convert_gradient(
-                    helper.pf_score_estimate(
+                    helper.pf_gradient_estimate(
                         **pf_kwargs,
                     ))
         full_buffer_gradient = np.mean(full_buffer_gradients, axis=0)
@@ -135,7 +135,7 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
 
 
         dfs = []
-        variables = ['log_mu', 'logit_phi', 'logit_lambduh', 'LRinv']
+        variables = ['log_mu', 'logit_phi', 'logit_lambduh', 'LRinv_vec']
         for buffer_size, estimates, runtimes in zip(buffer_sizes, estimates_bs, runtimes_bs):
             for key, value in estimates.items():
                 df = pd.DataFrame(np.array(value), columns=variables)
@@ -216,8 +216,8 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
 
 ### Script
 if __name__ == "__main__":
-    N_reps = 100 #number of repetitions
-    N_trials = 100
+    N_reps = 10 #number of repetitions
+    N_trials = 10
     buffer_sizes = np.array([8, 6, 4, 3, 2, 1, 0])
     alpha = 0.1
     beta = 0.8
@@ -225,7 +225,7 @@ if __name__ == "__main__":
     tau = 0.3
 
     # Set 1
-    T = 100 #length of series
+    T = 40 #length of series
     L = 16
     pars = np.array((alpha, beta, gamma, tau))
     path_to_out = os.path.join(

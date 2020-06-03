@@ -41,23 +41,23 @@ class SVMParameters(BaseParameters):
 
     @property
     def phi(self):
-        phi = self.var_dict['A']
+        phi = self.A
         return phi
 
     @property
     def sigma(self):
         if self.n == 1:
-            sigma = self.var_dict['LQinv'] ** -1
+            sigma = self.LQinv ** -1
         else:
-            sigma = np.linalg.inv(self.var_dict['LQinv'].T)
+            sigma = np.linalg.inv(self.LQinv.T)
         return sigma
 
     @property
     def tau(self):
         if self.m == 1:
-            tau = self.var_dict['LRinv'] ** -1
+            tau = self.LRinv ** -1
         else:
-            tau = np.linalg.inv(self.var_dict['LRinv'].T)
+            tau = np.linalg.inv(self.LRinv.T)
         return tau
 
 class SVMPrior(BasePrior):

@@ -1316,7 +1316,7 @@ def convert_gradient(gradient, parameters):
         gradient['log_mu'],
         gradient['logit_phi'],
         gradient['logit_lambduh'],
-        gradient['LRinv']*(-parameters.LRinv**-1), # grad w.r.t. tau
+        gradient['LRinv_vec']*(-parameters.LRinv**-1), # grad w.r.t. tau
         ]).flatten()
     return new_gradient
 

@@ -1468,8 +1468,8 @@ def convert_gradient(gradient, parameters):
     """ Convert gradient w.r.t. LRinv, LQinv, C, A to gradient w.r.t phi, sigma, tau """
     new_gradient = np.array([
         gradient['A'], # grad w.r.t. A <-> grad w.r.t. phi
-        gradient['LQinv']*(-parameters.LQinv**-1), # grad w.r.t. sigma
-        gradient['LRinv']*(-parameters.LRinv**-1), # grad w.r.t. tau
+        gradient['LQinv_vec']*(-parameters.LQinv**-1), # grad w.r.t. sigma
+        gradient['LRinv_vec']*(-parameters.LRinv**-1), # grad w.r.t. tau
         ]).flatten()
     return new_gradient
 

@@ -43,8 +43,8 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
     def convert_gradient(grad_dict):
         return [
             grad_dict['A'],
-            grad_dict['LQinv'],
-            grad_dict['LRinv'],
+            grad_dict['LQinv_vec'],
+            grad_dict['LRinv_vec'],
             ]
 
     results_dfs = []
@@ -74,7 +74,7 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
         )
         for rep in pbar:
             full_buffer_gradients[rep] = convert_gradient(
-                    helper.pf_score_estimate(
+                    helper.pf_gradient_estimate(
                         **pf_kwargs,
                     ))
         full_buffer_gradient = np.mean(full_buffer_gradients, axis=0)
@@ -127,7 +127,7 @@ def make_plots(T, L, N_reps, N_trials, pars, buffer_sizes, path_to_out, seed=123
 
 
         dfs = []
-        variables = ['A', 'LQinv', 'LRinv']
+        variables = ['A', 'LQinv_vec', 'LRinv_vec']
         for buffer_size, estimates, runtimes in zip(buffer_sizes, estimates_bs, runtimes_bs):
             for key, value in estimates.items():
                 df = pd.DataFrame(np.array(value), columns=variables)

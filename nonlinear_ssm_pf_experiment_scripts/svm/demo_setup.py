@@ -42,7 +42,7 @@ os.chdir(project_root)
 sys.path.append(os.getcwd()) # Fix Python Path
 
 # Paths relative to project root
-current_folder = os.path.join("nonlinear_ssm_pf_experiment_scripts",, "svm")
+current_folder = os.path.join("nonlinear_ssm_pf_experiment_scripts", "svm")
 python_script_path = os.path.join(current_folder,"driver.py")
 experiment_folder = os.path.join("scratch", experiment_name) # Path to output
 
