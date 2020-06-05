@@ -1079,6 +1079,7 @@ class LGSSMHelper(SGMCMCHelper):
                 weights=weights,
                 prior_mean=prior_mean,
                 prior_var=prior_var,
+                logsumexp=True,
                 **kwargs
                 )
         predictive_loglikelihood = out['statistics']

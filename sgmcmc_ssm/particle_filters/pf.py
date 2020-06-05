@@ -70,10 +70,14 @@ def pf_filter(particles, log_weights, statistics, additive_statistic_func, kerne
                     )
     additive_statistic *= kwargs.get('additive_scale', 1.0)
 
-
-    new_statistics = statistics + \
-            np.sum(additive_statistic.T * log_normalize(new_log_weights),
-                    axis=1)
+    if kwargs.get('logsumexp', False):
+        max_add_stat = np.max(additive_statistic.T, axis=1)
+        new_statistics = statistics + max_add_stat + \
+                np.log(np.sum(np.exp(additive_statistic.T- max_add_stat[:,np.newaxis]) * log_normalize(new_log_weights)))
+    else:
+        new_statistics = statistics + \
+                np.sum(additive_statistic.T * log_normalize(new_log_weights),
+                        axis=1)
 
     return new_particles, new_log_weights, new_statistics
 
