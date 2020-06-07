@@ -594,8 +594,8 @@ def do_eval(target,
     # Set Metric + Sample Functions for Evaluator
     parameter_names = ['phi', 'sigma', 'tau']
     sample_functions = [sample_function_parameters(parameter_names)]
-    metric_functions = [noisy_logjoint_loglike_metric(
-        kind='pf', N=10000)]
+    metric_functions = [noisy_logjoint_loglike_metric(kind='pf', N=5000),
+            noisy_predictive_logjoint_loglike_metric(kind='pf', num_steps_ahead=5, N=5000)]
     if 'parameters' in data.keys():
         metric_functions += [
                metric_function_parameters(
@@ -1468,8 +1468,8 @@ def convert_gradient(gradient, parameters):
     """ Convert gradient w.r.t. LRinv, LQinv, C, A to gradient w.r.t phi, sigma, tau """
     new_gradient = np.array([
         gradient['A'], # grad w.r.t. A <-> grad w.r.t. phi
-        gradient['LQinv_vec']*(-parameters.LQinv**-1), # grad w.r.t. sigma
-        gradient['LRinv_vec']*(-parameters.LRinv**-1), # grad w.r.t. tau
+        gradient['LQinv_vec']*(-np.asscalar(parameters.LQinv)**-1), # grad w.r.t. sigma
+        gradient['LRinv_vec']*(-np.asscalar(parameters.LRinv)**-1), # grad w.r.t. tau
         ]).flatten()
     return new_gradient
 

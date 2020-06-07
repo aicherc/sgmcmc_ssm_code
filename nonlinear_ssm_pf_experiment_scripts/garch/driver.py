@@ -596,7 +596,7 @@ def do_eval(target,
     parameter_names = ['alpha', 'beta', 'gamma', 'log_mu', 'logit_lambduh', 'logit_phi', 'tau']
     sample_functions = [sample_function_parameters(parameter_names)]
     metric_functions = [noisy_logjoint_loglike_metric(kind='pf', N=5000),
-            noisy_predictive_logjoint_loglike_metric(num_steps_ahead=5, N=5000)]
+            noisy_predictive_logjoint_loglike_metric(kind='pf', num_steps_ahead=5, N=5000)]
     if 'parameters' in data.keys():
         metric_functions += [
                metric_function_parameters(
@@ -1316,7 +1316,7 @@ def convert_gradient(gradient, parameters):
         gradient['log_mu'],
         gradient['logit_phi'],
         gradient['logit_lambduh'],
-        gradient['LRinv_vec']*(-parameters.LRinv**-1), # grad w.r.t. tau
+        gradient['LRinv_vec']*(-np.asscalar(parameters.LRinv)**-1), # grad w.r.t. tau
         ]).flatten()
     return new_gradient
 
