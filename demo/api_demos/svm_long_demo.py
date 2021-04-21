@@ -165,7 +165,7 @@ print(sampler.noisy_gradient(kind='pf', N=1000,
     subsequence_length=10, buffer_length=5, minibatch_size=10))
 
 ## Example SGD Step
-sampler.parameters = sampler.prior.sample_prior()
+sampler.parameters = sampler.prior.sample_prior().project_parameters()
 print(sampler.parameters)
 for _ in range(5):
     print(sampler.step_sgd(kind='pf', N=1000,
@@ -173,7 +173,7 @@ for _ in range(5):
         ).project_parameters())
 
 ## Example ADAGRAD Step
-sampler.parameters = sampler.prior.sample_prior()
+sampler.parameters = sampler.prior.sample_prior().project_parameters()
 print(sampler.parameters)
 for _ in range(5):
     print(sampler.step_adagrad(kind='pf', N=1000,
@@ -181,7 +181,7 @@ for _ in range(5):
         ).project_parameters())
 
 ## Example SGLD Step
-sampler.parameters = sampler.prior.sample_prior()
+sampler.parameters = sampler.prior.sample_prior().project_parameters()
 print(sampler.parameters)
 for _ in range(5):
     print(sampler.sample_sgld(kind='pf', N=1000,
